@@ -55,7 +55,7 @@ For **TestFlight**, submit the iOS build with `eas submit -p ios`. For a quick *
 
 ## Project layout
 
-- `../shared/employeesSeed.json` — cùng nguồn với backend seed + fallback offline (Metro `watchFolders` gồm thư mục repo).
+- `constants/employeesSeed.json` — bản sao của `shared/employeesSeed.json` (bắt buộc cho EAS build). Đồng bộ: `cp ../shared/employeesSeed.json constants/employeesSeed.json` từ root repo.
 - `app/` — Expo Router (`(pos)`, `(admin)`, `(auth)`)
 - `components/` — shared UI (payment modal, admin PIN gate, etc.)
 - `api/client.js` — Axios instance + JWT from AsyncStorage (`local-demo` token skips `Authorization`)
