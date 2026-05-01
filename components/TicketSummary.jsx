@@ -111,7 +111,6 @@ export default function TicketSummary({
           onPress={onPay}
           className="bg-pay rounded-2xl py-4 items-center flex-row justify-center gap-2"
         >
-          <Ionicons name="logo-apple" size={26} color="#fff" />
           <Text className="text-white text-xl font-bold">PAY</Text>
         </Pressable>
       </View>
