@@ -16,7 +16,7 @@
     "@stripe/stripe-terminal-react-native": "^0.0.1-beta.31",
     "axios": "^1.13.6",
     "date-fns": "^4.1.0",
-    "expo": "~55.0.8",
+    "expo": "~55.0.26",
     "expo-constants": "~55.0.9",
     "expo-dev-client": "~55.0.35",
     "expo-file-system": "~55.0.11",
