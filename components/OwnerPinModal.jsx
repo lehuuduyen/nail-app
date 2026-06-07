@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Modal, Pressable, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -14,6 +14,8 @@ const KEYS = [
   ['7', '8', '9'],
   ['*', '0', '#'],
 ];
+
+const DOT_COUNT = 6;
 
 export default function OwnerPinModal({ visible, onVerified, onCancel }) {
   const [pin, setPin] = useState('');
@@ -47,9 +49,13 @@ export default function OwnerPinModal({ visible, onVerified, onCancel }) {
     setPin('');
   }, [onVerified, pin, shake]);
 
+  useEffect(() => {
+    if (pin.length >= DOT_COUNT) tryUnlock();
+  }, [pin, tryUnlock]);
+
   const append = (d) => {
     if (d === '*' || d === '#') return;
-    if (pin.length >= 6) return;
+    if (pin.length >= DOT_COUNT) return;
     setError(false);
     setPin((p) => p + d);
   };
@@ -65,7 +71,6 @@ export default function OwnerPinModal({ visible, onVerified, onCancel }) {
     onCancel?.();
   }, [onCancel]);
 
-  const dotCount = 6;
   const filled = pin.length;
 
   return (
@@ -83,7 +88,7 @@ export default function OwnerPinModal({ visible, onVerified, onCancel }) {
             <Text className="text-xs text-neutral-500 text-center mb-5">Enter your PIN</Text>
 
             <View className="flex-row justify-center gap-3 mb-2">
-              {Array.from({ length: dotCount }, (_, i) => (
+              {Array.from({ length: DOT_COUNT }, (_, i) => (
                 <Text
                   key={i}
                   className="text-2xl"

@@ -1,5 +1,6 @@
 import { Modal, Pressable, Text, View } from 'react-native';
 import { formatMoney } from '../utils/money';
+import { isStripeTerminalSupported } from '../hooks/useStripeReaderConnection';
 
 export default function PaymentModal({
   visible,
@@ -7,10 +8,13 @@ export default function PaymentModal({
   cardAmount,
   cashAmount,
   onPayCard,
+  onPayStripe,
   onPayCash,
   cardPaymentEnabled = false,
+  stripeEnabled = false,
 }) {
-  const sideHint = cardPaymentEnabled
+  const hasCard = cardPaymentEnabled || stripeEnabled;
+  const sideHint = hasCard
     ? 'Please have the customer select the pay options below'
     : 'Cash / gift / other — thanh toán thẻ qua máy đang tắt';
 
@@ -35,6 +39,38 @@ export default function PaymentModal({
                   </Text>
                 </Pressable>
               ) : null}
+
+              {stripeEnabled && onPayStripe ? (
+                <>
+                  <Pressable
+                    onPress={onPayStripe}
+                    className="bg-[#635BFF] rounded-2xl py-5 items-center"
+                  >
+                    <Text className="text-white text-3xl mb-1">💳</Text>
+                    <Text className="text-white font-bold text-lg">Pay Card — Stripe</Text>
+                    <Text className="text-white text-xs opacity-90 mt-0.5 px-2 text-center">
+                      Máy đọc thẻ Stripe Terminal
+                    </Text>
+                    <Text className="text-white text-xl font-bold mt-1">
+                      {formatMoney(cardAmount)}
+                    </Text>
+                  </Pressable>
+
+                  {!isStripeTerminalSupported() && (
+                    <View className="flex-row items-start gap-2 bg-amber-50 border border-amber-300 rounded-xl px-3 py-2">
+                      <Text className="text-amber-500 text-base leading-tight">⚠️</Text>
+                      <View className="flex-1">
+                        <Text className="text-amber-800 font-bold text-xs">Cần rebuild app</Text>
+                        <Text className="text-amber-700 text-xs leading-snug mt-0.5">
+                          Stripe Terminal chưa sẵn sàng. Chạy{' '}
+                          <Text className="font-mono font-bold">eas build</Text> rồi cài lại app để dùng máy đọc thẻ.
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                </>
+              ) : null}
+
               <Pressable
                 onPress={onPayCash}
                 className="bg-[#2196F3] rounded-2xl py-5 items-center"

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +15,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../../../api/client';
+import { useAuthStore } from '../../../store/authStore';
+
+let ImagePicker = null;
+try { ImagePicker = require('expo-image-picker'); } catch { /* needs eas build */ }
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5001';
 import {
   CASH_CHECK_PICKS,
   COMMISSION_PICKS,
@@ -46,6 +53,9 @@ export default function EditEmployeeScreen() {
   const [minOther, setMinOther] = useState('');
   const [customTech, setCustomTech] = useState('');
   const [customOwner, setCustomOwner] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState(null);
+  const [pendingPhoto, setPendingPhoto] = useState(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,6 +68,7 @@ export default function EditEmployeeScreen() {
       setEmail(data.email || '');
       setListOrder(data.listOrder != null ? String(data.listOrder) : '');
       setIsActive(data.isActive !== false);
+      setAvatarUrl(data.avatarUrl || null);
       setTips(data.tipsEnabled !== false);
       setCommissionTechPct(
         data.commissionTechPct != null ? Number(data.commissionTechPct) : 100
@@ -88,6 +99,53 @@ export default function EditEmployeeScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const pickPhoto = async () => {
+    if (!ImagePicker) {
+      Alert.alert('Cần EAS Build', 'Tính năng upload ảnh cần rebuild app. Chạy: eas build --platform ios');
+      return;
+    }
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Quyền truy cập', 'Cần cho phép truy cập thư viện ảnh.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      setPendingPhoto(result.assets[0]);
+    }
+  };
+
+  const uploadPhoto = async () => {
+    if (!pendingPhoto) return;
+    setUploadingPhoto(true);
+    try {
+      const uri = pendingPhoto.uri;
+      const filename = uri.split('/').pop();
+      const ext = (filename.split('.').pop() || 'jpg').toLowerCase();
+      const formData = new FormData();
+      formData.append('avatar', { uri, name: filename, type: `image/${ext === 'jpg' ? 'jpeg' : ext}` });
+      const token = useAuthStore.getState().token;
+      const res = await fetch(`${API_URL}/api/employees/${id}/avatar`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      if (!res.ok) throw new Error('Upload failed');
+      const json = await res.json();
+      setAvatarUrl(json.avatarUrl);
+      setPendingPhoto(null);
+    } catch (e) {
+      Alert.alert('Lỗi', `Không upload được ảnh: ${e?.message}`);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const pickCommission = (tech, owner) => {
     setCommissionTechPct(tech);
@@ -129,6 +187,7 @@ export default function EditEmployeeScreen() {
     setSaving(true);
     try {
       await api.put(`/api/employees/${id}`, body);
+      if (pendingPhoto) await uploadPhoto();
       Alert.alert('Đã lưu', 'Cập nhật nhân viên.');
       router.back();
     } catch (e) {
@@ -163,6 +222,30 @@ export default function EditEmployeeScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
         keyboardShouldPersistTaps="handled"
       >
+        {/* Avatar */}
+        <View style={{ alignItems: 'center', marginBottom: 20 }}>
+          <Pressable onPress={pickPhoto} style={{ position: 'relative' }}>
+            {pendingPhoto?.uri || avatarUrl ? (
+              <Image
+                source={{ uri: pendingPhoto?.uri || avatarUrl }}
+                style={{ width: 96, height: 96, borderRadius: 48 }}
+              />
+            ) : (
+              <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: '#e5e7eb', alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="person" size={44} color="#9ca3af" />
+              </View>
+            )}
+            <View style={{ position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, borderRadius: 14, backgroundColor: '#0066CC', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' }}>
+              {uploadingPhoto
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Ionicons name="camera" size={14} color="#fff" />}
+            </View>
+          </Pressable>
+          {pendingPhoto && !uploadingPhoto && (
+            <Text style={{ fontSize: 11, color: '#d97706', marginTop: 4 }}>Ảnh sẽ upload khi bấm LƯU</Text>
+          )}
+        </View>
+
         <View style={styles.switchRow}>
           <Text style={styles.switchLabel}>Đang làm việc</Text>
           <Switch value={isActive} onValueChange={setIsActive} />

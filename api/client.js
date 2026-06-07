@@ -1,5 +1,6 @@
 import axios from 'axios';
 import Constants from 'expo-constants';
+import { router } from 'expo-router';
 import { useAuthStore } from '../store/authStore';
 
 const baseURL =
@@ -20,5 +21,22 @@ api.interceptors.request.use((config) => {
   }
   return config;
 });
+
+// Token thật (không phải local-demo) bị backend từ chối (hết hạn / không hợp lệ)
+// → đăng xuất ngay và đưa về màn login, tránh lỗi 401 âm thầm rải rác khắp app.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status;
+    const token = useAuthStore.getState().token;
+    const isOfflineDemo = !token || String(token).startsWith('local-demo');
+    if (status === 401 && !isOfflineDemo) {
+      console.warn('[api] 401 — token hết hạn/không hợp lệ, đăng xuất');
+      useAuthStore.getState().logout();
+      router.replace('/(auth)/login');
+    }
+    return Promise.reject(error);
+  },
+);
 
 export default api;

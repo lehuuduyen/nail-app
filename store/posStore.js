@@ -28,6 +28,8 @@ export const usePosStore = create((set, get) => ({
       discount: 0,
       taxEnabled: false,
       customLabel: '',
+      staffId: null,
+      staffName: null,
     }),
   setTaxEnabled: (v) => set({ taxEnabled: v }),
   setTip: (v) => set({ tip: Number(v) || 0 }),

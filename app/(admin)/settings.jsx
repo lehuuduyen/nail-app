@@ -11,6 +11,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import OwnerGate from '../../components/OwnerGate';
+import StripeReaderModal from '../../components/StripeReaderModal';
+import { isStripeTerminalSupported } from '../../hooks/useStripeReaderConnection';
+import { isPrinterSupported, usePrinterConnection } from '../../hooks/usePrinterConnection';
+import { buildTestPrintEscPos } from '../../utils/escpos';
 import { useOwnerStore } from '../../store/ownerStore';
 import { fetchSalonDisplayName } from '../../api/catalog';
 import { loadAllSettings, saveSetting, SETTING_KEYS } from '../../utils/settingsStorage';
@@ -72,6 +76,45 @@ export default function SettingsScreen() {
   const [moreDays, setMoreDays] = useState(false);
   const [noncardReceipts, setNoncardReceipts] = useState('1');
   const [newPin, setNewPin] = useState('');
+  const [showReaderModal, setShowReaderModal] = useState(false);
+  const [connectedReaderName, setConnectedReaderName] = useState(null);
+
+  const printer = usePrinterConnection();
+  const [printerIpInput, setPrinterIpInput] = useState(printer.ip);
+  const [printerPortInput, setPrinterPortInput] = useState(String(printer.port || 9100));
+
+  useEffect(() => {
+    setPrinterIpInput(printer.ip);
+    setPrinterPortInput(String(printer.port || 9100));
+  }, [printer.ip, printer.port]);
+
+  const handleConnectPrinter = useCallback(async () => {
+    const ip = printerIpInput.trim();
+    const port = Number(printerPortInput) || 9100;
+    if (!ip) {
+      Alert.alert('Máy in', 'Hãy nhập địa chỉ IP của máy in.');
+      return;
+    }
+    printer.saveConfig(ip, port);
+    const ok = await printer.testConnect(ip, port);
+    if (ok) {
+      Alert.alert('Máy in', `Kết nối thành công tới ${ip}:${port}`);
+    } else {
+      Alert.alert('Máy in', printer.lastError || 'Không kết nối được máy in. Kiểm tra IP và mạng WiFi.');
+    }
+  }, [printer, printerIpInput, printerPortInput]);
+
+  const handleTestPrint = useCallback(async () => {
+    const ok = await printer.send(buildTestPrintEscPos());
+    if (!ok) {
+      Alert.alert('Máy in', printer.lastError || 'In thử thất bại — kiểm tra kết nối máy in.');
+    }
+  }, [printer]);
+
+  const handleDisconnectPrinter = useCallback(() => {
+    printer.disconnect();
+    Alert.alert('Máy in', 'Đã ngắt kết nối máy in.');
+  }, [printer]);
 
   const hydrate = useCallback(async () => {
     const s = await loadAllSettings();
@@ -141,6 +184,7 @@ export default function SettingsScreen() {
           <Text className="text-white font-black text-center text-xs mb-4 uppercase">Settings</Text>
           {sidebarBtn('store', 'STORE INFORMATION')}
           {sidebarBtn('secrets', 'SECRETS')}
+          {sidebarBtn('devices', 'DEVICES')}
           {sidebarBtn('hours', 'STORE HOURS')}
         </View>
 
@@ -376,6 +420,121 @@ export default function SettingsScreen() {
             </View>
           ) : null}
 
+          {tab === 'devices' ? (
+            <View className="py-3">
+              <Text className="text-[10px] font-bold text-white uppercase mb-3">
+                STRIPE CARD READER (BLUETOOTH / WIFI)
+              </Text>
+              <View className="bg-neutral-800 rounded-xl p-4 mb-5 border border-neutral-700">
+                <View className="flex-row items-center mb-2">
+                  <View
+                    className="w-3 h-3 rounded-full mr-2"
+                    style={{ backgroundColor: connectedReaderName ? '#4caf50' : '#d32f2f' }}
+                  />
+                  <Text className="text-white text-xs font-semibold flex-1">
+                    {connectedReaderName ?? 'Chưa kết nối'}
+                  </Text>
+                </View>
+                <Text className="text-neutral-400 text-[10px] mb-4">
+                  {isStripeTerminalSupported()
+                    ? 'Stripe M2 (Bluetooth) hoặc WisePOS E / S700 (WiFi/LAN).\nCần bật Bluetooth và cấp quyền Location.'
+                    : 'Cần EAS Build để dùng Stripe Terminal.\nChạy: eas build --platform ios --profile development'}
+                </Text>
+                <Pressable
+                  onPress={() => setShowReaderModal(true)}
+                  className="py-3 rounded-xl items-center mb-2"
+                  style={{ backgroundColor: BLUE }}
+                >
+                  <Text className="text-white font-bold text-xs">
+                    {connectedReaderName ? 'ĐỔI MÁY ĐỌC THẺ' : 'TÌM & KẾT NỐI MÁY ĐỌC THẺ'}
+                  </Text>
+                </Pressable>
+                {connectedReaderName ? (
+                  <Pressable
+                    onPress={() => setConnectedReaderName(null)}
+                    className="py-2 rounded-xl items-center border"
+                    style={{ borderColor: RED }}
+                  >
+                    <Text className="font-bold text-xs" style={{ color: RED }}>
+                      NGẮT KẾT NỐI
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+
+              <Text className="text-[10px] font-bold text-white uppercase mb-3">
+                MÁY IN HOÁ ĐƠN (WIFI / LAN)
+              </Text>
+              <View className="bg-neutral-800 rounded-xl p-4 border border-neutral-700">
+                <View className="flex-row items-center mb-2">
+                  <View
+                    className="w-3 h-3 rounded-full mr-2"
+                    style={{ backgroundColor: printer.connected ? '#4caf50' : '#d32f2f' }}
+                  />
+                  <Text className="text-white text-xs font-semibold flex-1">
+                    {printer.connected ? `Đã kết nối — ${printer.ip}:${printer.port}` : 'Chưa kết nối'}
+                  </Text>
+                </View>
+                <Text className="text-neutral-400 text-[10px] mb-3">
+                  {isPrinterSupported()
+                    ? 'Máy in nhiệt ESC/POS có cổng WiFi/Ethernet (giao thức RAW, cổng 9100).\nHoạt động trên cả iOS và Android — nhập IP máy in trong cùng mạng WiFi.'
+                    : 'Cần EAS Build để dùng máy in qua mạng.\nChạy: eas build --platform ios --profile development'}
+                </Text>
+
+                <View className="flex-row gap-2 mb-2">
+                  <TextInput
+                    value={printerIpInput}
+                    onChangeText={setPrinterIpInput}
+                    placeholder="Địa chỉ IP (vd: 192.168.1.50)"
+                    placeholderTextColor="#777"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="numbers-and-punctuation"
+                    className="flex-2 bg-neutral-900 text-white text-xs rounded-lg px-3 py-2 border border-neutral-700"
+                    style={{ flex: 2 }}
+                  />
+                  <TextInput
+                    value={printerPortInput}
+                    onChangeText={setPrinterPortInput}
+                    placeholder="9100"
+                    placeholderTextColor="#777"
+                    keyboardType="number-pad"
+                    className="bg-neutral-900 text-white text-xs rounded-lg px-3 py-2 border border-neutral-700"
+                    style={{ flex: 1 }}
+                  />
+                </View>
+
+                <View className="flex-row gap-2">
+                  <Pressable
+                    onPress={handleConnectPrinter}
+                    disabled={printer.connecting}
+                    className="flex-1 py-3 rounded-xl items-center border-2"
+                    style={{ borderColor: BLUE, opacity: printer.connecting ? 0.5 : 1 }}
+                  >
+                    <Text className="font-bold text-[10px]" style={{ color: '#64b5f6' }}>
+                      {printer.connecting ? 'ĐANG KẾT NỐI…' : 'KẾT NỐI MÁY IN'}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleDisconnectPrinter}
+                    className="flex-1 py-3 rounded-xl items-center border-2"
+                    style={{ borderColor: '#555' }}
+                  >
+                    <Text className="font-bold text-[10px] text-neutral-400">NGẮT MÁY IN</Text>
+                  </Pressable>
+                </View>
+                <Pressable
+                  onPress={handleTestPrint}
+                  disabled={printer.connecting}
+                  className="mt-2 py-3 rounded-xl items-center"
+                  style={{ backgroundColor: BLUE, opacity: printer.connecting ? 0.5 : 1 }}
+                >
+                  <Text className="text-white font-bold text-[10px]">IN THỬ</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
           {tab === 'hours' ? (
             <View className="py-8 items-center px-4">
               <Ionicons name="time-outline" size={48} color="#888" />
@@ -386,6 +545,15 @@ export default function SettingsScreen() {
           ) : null}
         </ScrollView>
       </View>
+
+      <StripeReaderModal
+        visible={showReaderModal}
+        onClose={() => setShowReaderModal(false)}
+        onConnect={(reader) => {
+          setConnectedReaderName(reader.label || reader.serialNumber || 'Reader');
+          setShowReaderModal(false);
+        }}
+      />
     </OwnerGate>
   );
 }

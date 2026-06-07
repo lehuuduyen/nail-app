@@ -4,7 +4,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 export const OWNER_PIN_STORAGE_KEY = 'OWNER_PIN';
 
-const DEFAULT_PIN = '1234';
+const DEFAULT_PIN = process.env.EXPO_PUBLIC_ADMIN_PIN || '123456';
 const PERSIST_NAME = 'nail-owner-session';
 
 async function readExpectedPin() {

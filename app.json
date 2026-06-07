@@ -16,7 +16,11 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.nicenailsspa.app",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "Allow access to select staff profile photos.",
+        "NSBluetoothAlwaysUsageDescription": "Bluetooth access is required to connect to the Stripe M2 card reader.",
+        "NSBluetoothPeripheralUsageDescription": "Bluetooth access is required to connect to the Stripe M2 card reader.",
+        "NSLocationWhenInUseUsageDescription": "Location access is required to connect to Bluetooth card readers."
       }
     },
     "android": {
@@ -41,13 +45,39 @@
     },
     "plugins": [
       "expo-router",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#c9a96e",
+          "defaultChannel": "default"
+        }
+      ],
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.nicenailsspa.app"
+        }
+      ],
+      [
+        "@stripe/stripe-terminal-react-native",
+        {
+          "bluetoothBackgroundMode": true,
+          "locationWhenInUsePermission": "Location access is required to connect to card readers.",
+          "bluetoothPeripheralPermission": "Bluetooth access is required to connect to card readers.",
+          "bluetoothAlwaysUsagePermission": "Bluetooth access is required to connect to card readers.",
+          "appDelegate": true,
+          "tapToPayCheck": true
+        }
+      ]
     ],
     "extra": {
       "router": {},
       "eas": {
         "projectId": "d1b4502b-e670-4f3e-9f65-1ad85972235f"
       }
-    }
+    },
+    "newArchEnabled": false
   }
 }

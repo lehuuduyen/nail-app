@@ -24,6 +24,7 @@ function formatPaymentLine(r) {
 }
 
 function formatReceiptServiceBy(r) {
+  if (r._mergedServiceBy) return r._mergedServiceBy;
   const n = (r.notes || '').trim();
   if (n && n.length < 36 && !n.includes(':')) {
     const u = n.toUpperCase();
@@ -34,6 +35,36 @@ function formatReceiptServiceBy(r) {
     return `${s.replace(/\s+/g, ' ')}+`;
   }
   return '—';
+}
+
+/** Gộp tất cả transaction trong cùng 1 ticket thành 1 record đại diện. */
+function mergeTicketGroup(txs) {
+  const sorted = [...txs].sort((a, b) => a.id - b.id);
+  const first = sorted[0];
+  const totalAmount = sorted.reduce((s, tx) => s + Number(tx.amount || 0), 0);
+  const totalTips = sorted.reduce((s, tx) => s + Number(tx.tips || 0), 0);
+  const names = [...new Set(
+    sorted
+      .map((tx) => tx.Employee ? formatEmployeeNameFromDb(tx.Employee).toUpperCase().trim() : null)
+      .filter(Boolean),
+  )];
+  return {
+    ...first,
+    amount: totalAmount,
+    tips: totalTips,
+    _mergedServiceBy: names.length ? `${names.join('+')}+` : '—',
+  };
+}
+
+/** Nhóm transactions theo ticketId (nếu có), ngược lại mỗi tx là 1 nhóm riêng. */
+function groupTransactionsByTicket(list) {
+  const map = new Map();
+  for (const tx of list) {
+    const key = tx.ticketId || `solo-${tx.id}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(tx);
+  }
+  return [...map.values()].map(mergeTicketGroup);
 }
 
 /** Chuẩn YYYY-MM-DD từ trường date API (string DATEONLY hoặc ISO). */
@@ -92,16 +123,12 @@ export function transactionsToReceiptRows(transactions, salonDateYmd) {
     return { paid: [], unpaid: [] };
   }
 
-  const paid = [];
-  const unpaid = [];
-  for (const tx of list) {
-    if (isRefunded(tx)) continue;
-    if (isUnpaidStatus(tx)) {
-      unpaid.push(mapToUnpaidRow(tx));
-    } else {
-      paid.push(mapToPaidRow(tx));
-    }
-  }
+  // Tách paid/unpaid trước khi group (unpaid có thể chưa có ticketId)
+  const unpaidRaw = list.filter((tx) => !isRefunded(tx) && isUnpaidStatus(tx));
+  const paidRaw = list.filter((tx) => !isRefunded(tx) && !isUnpaidStatus(tx));
+
+  const paid = groupTransactionsByTicket(paidRaw).map(mapToPaidRow);
+  const unpaid = groupTransactionsByTicket(unpaidRaw).map(mapToUnpaidRow);
 
   return { paid, unpaid };
 }
