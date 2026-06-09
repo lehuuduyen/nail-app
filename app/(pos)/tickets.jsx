@@ -16,7 +16,7 @@ import api from '../../api/client';
 import { useOwnerStore } from '../../store/ownerStore';
 import { usePosStore } from '../../store/posStore';
 import { formatEmployeeNameFromDb } from '../../utils/staffDisplay';
-import { formatMoney, splitTransactionAmount } from '../../utils/money';
+import { formatMoney, splitTransactionAmountForDisplay } from '../../utils/money';
 import { formatTxListTime, formatYmdAsTicketLabel } from '../../utils/ticketDisplay';
 import { getSalonDateYmd } from '../../utils/salonTz';
 
@@ -107,7 +107,7 @@ export default function TicketsScreen() {
 
   const renderTicketRow = useCallback(
     ({ item: tx, index: idx }) => {
-      const { withoutTip, tip, total } = splitTransactionAmount(tx);
+      const { withoutTip, tip, total } = splitTransactionAmountForDisplay(tx);
       const tech = formatEmployeeNameFromDb(tx?.Employee ?? tx?.employee) || '—';
       const notes = String(tx?.notes || '');
       const timeStr = formatTxListTime(tx);

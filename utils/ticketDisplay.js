@@ -1,5 +1,5 @@
 import { format } from 'date-fns';
-import { formatMoney, splitTransactionAmount } from './money';
+import { formatMoney, splitTransactionAmountForDisplay } from './money';
 import { formatEmployeeNameFromDb } from './staffDisplay';
 
 /** e.g. 2026-03-26 → MAR-26-26 */
@@ -57,7 +57,7 @@ export function techTicketRowSummary(tx) {
     amount: Number.isFinite(amountN) ? amountN : 0,
     tips: Number.isFinite(tipsN) ? tipsN : 0,
   };
-  const { withoutTip, tip } = splitTransactionAmount(normalized);
+  const { withoutTip, tip } = splitTransactionAmountForDisplay(normalized);
   const empRec = pickTransactionEmployee(tx);
   const emp = empRec
     ? formatEmployeeNameFromDb(empRec)

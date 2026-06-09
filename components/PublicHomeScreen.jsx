@@ -160,11 +160,16 @@ export default function PublicHomeScreen() {
     const sug = turnSnapshot.suggested;
     const defaultTurnType =
       sug != null && String(s.id) === String(sug) ? 'walk_in' : 'customer_pick';
+    const displayName = s.displayName || `${s.firstName} ${s.lastName}`.trim();
+    // Tab navigator giữ màn new-ticket đã mount — push lần 2 trở đi không cập nhật
+    // lại params (chỉ JUMP_TO màn cũ), nên phải set thẳng vào store để màn luôn
+    // nhận đúng nhân viên vừa chọn (không bị kẹt ở người đầu tiên trong phiên).
+    usePosStore.getState().setStaff(s.id, displayName);
     router.push({
       pathname: '/(pos)/new-ticket',
       params: {
         staffId: String(s.id),
-        staffName: s.displayName || `${s.firstName} ${s.lastName}`.trim(),
+        staffName: displayName,
         suggestedEmployeeId: sug != null ? String(sug) : '',
         defaultTurnType,
       },
@@ -229,7 +234,11 @@ export default function PublicHomeScreen() {
         </View>
 
         <RightActionButtons
-          onTechTickets={() => router.push('/(pos)/new-ticket')}
+          onTechTickets={() => {
+            // Mở vé trống — không gán sẵn nhân viên (chọn "Add Tech" theo từng dòng).
+            usePosStore.getState().setStaff(null, null);
+            router.push('/(pos)/new-ticket');
+          }}
           onCheckTurns={() => setCheckTurnOpen(true)}
         />
       </View>

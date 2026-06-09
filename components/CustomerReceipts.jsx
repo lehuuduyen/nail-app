@@ -35,7 +35,7 @@ export default function CustomerReceipts({
             <Text style={{ flex: 1, fontSize: 8, fontWeight: '800', color: HEADER_TEXT }}>Receipt ID</Text>
             <Text style={{ flex: 1.4, fontSize: 8, fontWeight: '800', color: HEADER_TEXT }}>Payment Type</Text>
             <Text style={{ flex: 1, fontSize: 8, fontWeight: '800', color: HEADER_TEXT }}>Total Due</Text>
-            <Text style={{ flex: 1, fontSize: 8, fontWeight: '800', color: HEADER_TEXT }}>Amount Due</Text>
+            <Text style={{ flex: 1, fontSize: 8, fontWeight: '800', color: HEADER_TEXT }}>Tip Added</Text>
           </View>
           {paidReceipts.map((r) => (
             <View key={String(r.id)} style={{ borderBottomWidth: 1, borderBottomColor: '#e8e8e8', paddingVertical: 6, paddingHorizontal: 4 }}>

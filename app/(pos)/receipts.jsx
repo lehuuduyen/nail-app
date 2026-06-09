@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../../api/client';
-import { formatMoney, splitTransactionAmount } from '../../utils/money';
+import { formatMoney, splitTransactionAmountForDisplay } from '../../utils/money';
 
 export default function ReceiptsScreen() {
   const insets = useSafeAreaInsets();
@@ -48,7 +48,7 @@ export default function ReceiptsScreen() {
           keyExtractor={(item) => String(item.id)}
           contentContainerStyle={{ padding: 12 }}
           renderItem={({ item }) => {
-            const { total, tip, withoutTip } = splitTransactionAmount(item);
+            const { total, tip, withoutTip } = splitTransactionAmountForDisplay(item);
             return (
               <View className="bg-white rounded-xl p-3 mb-2 border border-neutral-200">
                 <View className="flex-row justify-between">

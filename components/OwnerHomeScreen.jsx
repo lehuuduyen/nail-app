@@ -15,7 +15,7 @@ import { fetchCatalogEmployees, fetchCatalogServices } from '../api/catalog';
 import { SAMPLE_STAFF } from '../constants/sampleData';
 import { useLocalCatalogStore } from '../store/localCatalogStore';
 import { useOwnerStore } from '../store/ownerStore';
-import { splitTransactionAmount } from '../utils/money';
+import { splitTransactionAmountForDisplay } from '../utils/money';
 import { getSalonDateYmd } from '../utils/salonTz';
 import { mapApiEmployeeToPosStaff } from '../utils/staffDisplay';
 import OwnerTicketEditModal from './OwnerTicketEditModal';
@@ -132,7 +132,7 @@ export default function OwnerHomeScreen() {
     let total = 0;
     let tips = 0;
     for (const t of transactions) {
-      const { withoutTip, tip } = splitTransactionAmount(t);
+      const { withoutTip, tip } = splitTransactionAmountForDisplay(t);
       total += withoutTip;
       tips += tip;
     }

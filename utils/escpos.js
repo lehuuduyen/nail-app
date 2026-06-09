@@ -295,12 +295,10 @@ export function buildReceiptEscPos(d) {
   b.boldOn();
   b.line(`TOTAL CHARGE: $${chargeAmt.toFixed(2)}`);
   b.boldOff();
-  if (tip > 0) {
-    b.line(`Tip Added: $${tip.toFixed(2)}`);
-    b.boldOn();
-    b.line(`GRAND TOTAL: $${(chargeAmt + tip).toFixed(2)}`);
-    b.boldOff();
-  }
+  b.line(`Tip Added: $${tip.toFixed(2)}`);
+  b.boldOn();
+  b.line(`GRAND TOTAL: $${(chargeAmt + tip).toFixed(2)}`);
+  b.boldOff();
 
   if ((isCard || isSplit) && cardLast4) {
     b.divider();

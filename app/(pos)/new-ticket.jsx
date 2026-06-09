@@ -23,6 +23,7 @@ import CardCheckoutModal from '../../components/CardCheckoutModal';
 import ReceiptModal from '../../components/ReceiptModal';
 import StripeTerminalPaymentModal from '../../components/StripeTerminalPaymentModal';
 import StripeReaderModal from '../../components/StripeReaderModal';
+import TipDistributionModal from '../../components/TipDistributionModal';
 import ServiceButton from '../../components/ServiceButton';
 import TicketSummary from '../../components/TicketSummary';
 import { SAMPLE_SERVICES, SAMPLE_STAFF } from '../../constants/sampleData';
@@ -51,7 +52,7 @@ import { pollHelcimTransactionApproved } from '../../utils/helcimTerminal';
 // Lazy-load Stripe hooks — native-only, không tương thích web.
 // Platform.OS check để Metro tree-shake trên web bundle.
 let useStripe = () => ({ initPaymentSheet: null, presentPaymentSheet: null });
-let useStripeTerminal = () => ({ collectPaymentMethod: null, retrievePaymentIntent: null, processPaymentIntent: null, cancelCollectPaymentMethod: null, connectedReader: null });
+let useStripeTerminal = () => ({ collectPaymentMethod: null, retrievePaymentIntent: null, processPaymentIntent: null, cancelCollectPaymentMethod: null, connectedReader: null, setSimulatedCard: null });
 if (Platform.OS !== 'web') {
   try {
     useStripe = require('@stripe/stripe-react-native').useStripe;
@@ -91,7 +92,14 @@ const READER_DISPLAY_MESSAGE_HINTS = {
 
 const READER_INPUT_HINT = 'Máy đang chờ — vui lòng chạm hoặc đưa thẻ vào máy để xác nhận giao dịch';
 
-const NUM_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0'];
+// Bố cục bàn phím số kiểu POS quen thuộc — gộp luôn nút xoá (⌫) vào lưới để
+// tay không phải di chuyển xa giữa số và nút xoá khi gõ nhanh.
+const NUMPAD_ROWS = [
+  ['1', '2', '3'],
+  ['4', '5', '6'],
+  ['7', '8', '9'],
+  ['.', '0', '⌫'],
+];
 
 
 const VISION_URL = process.env.EXPO_PUBLIC_VISION_URL || 'http://localhost:8000';
@@ -139,6 +147,15 @@ function isApiNumericId(v) {
   return Number.isFinite(n) && n > 0;
 }
 
+/** Bỏ dấu tiếng Việt + thường hoá — cho phép gõ "ve gel" tìm ra "Vẽ Gel". */
+function foldText(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/gi, 'd')
+    .toLowerCase();
+}
+
 function routeParamFirst(v) {
   if (v == null || v === '') return '';
   const x = Array.isArray(v) ? v[0] : v;
@@ -166,15 +183,37 @@ export default function NewTicketScreen() {
   const getCardFeeBase = usePosStore((s) => s.getCardFeeBase);
   const staffId = usePosStore((s) => s.staffId);
   const staffName = usePosStore((s) => s.staffName);
-  // Prefer params for immediate display — posStore updates asynchronously via useEffect
-  const displayStaffName = routeParamFirst(params.staffName) || staffName || null;
+  // Ưu tiên store: các màn điều hướng (PublicHomeScreen, appointments...) gọi
+  // setStaff() thẳng vào store TRƯỚC khi push nên luôn mới nhất; còn `params`
+  // có thể bị "đứng hình" ở giá trị nhân viên ĐẦU TIÊN từng chọn trong phiên vì
+  // Tab navigator chỉ JUMP_TO màn new-ticket đã mount thay vì cập nhật lại params.
+  const displayStaffName = staffName || routeParamFirst(params.staffName) || null;
 
   const [tab, setTab] = useState(POS_TAB_ORDER[0]);
+  const [serviceSearch, setServiceSearch] = useState('');
   const [services, setServices] = useState(SAMPLE_SERVICES);
   const [fallbackServiceId, setFallbackServiceId] = useState(1);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [customOpen, setCustomOpen] = useState(false);
   const [customName, setCustomName] = useState('CUSTOM');
+  // Các dịch vụ thật (Fullset, Vẽ Design...) được chọn làm gốc cho khoản custom — có
+  // thể chọn NHIỀU (vd. Fullset + Design chung 1 giá). Dòng vé tạo ra dùng tên gộp +
+  // serviceId của dịch vụ ĐẦU TIÊN được chọn để báo cáo doanh thu vẫn tính đúng loại
+  // dịch vụ chính, dù giá thực tế khác giá niêm yết (vd. theo độ dài móng).
+  // [] = khoản "khác" tự do, dùng fallbackServiceId.
+  const [customBaseServices, setCustomBaseServices] = useState([]);
+  const toggleCustomBaseService = (svc) => {
+    setCustomBaseServices((prev) => {
+      const exists = prev.some((p) => p.id === svc.id);
+      const next = exists ? prev.filter((p) => p.id !== svc.id) : [...prev, svc];
+      setCustomName(next.length ? next.map((s) => s.name).join(' + ') : 'CUSTOM');
+      return next;
+    });
+  };
+  const resetCustomServicePicker = () => {
+    setCustomBaseServices([]);
+    setCustomName('CUSTOM');
+  };
   const [amountStr, setAmountStr] = useState('');
   const [discountOpen, setDiscountOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
@@ -196,6 +235,17 @@ export default function NewTicketScreen() {
   const [showPhoneSearch, setShowPhoneSearch] = useState(false);
   const cardPendingRef = useRef(null);
   const posTestSeedTriedRef = useRef(false);
+  const [tipDistribVisible, setTipDistribVisible] = useState(false);
+  const [tipDistribConfig, setTipDistribConfig] = useState(null); // { totalTip, techGroups }
+  // Dữ liệu chờ lưu DB sau khi quản lý phân chia tip (defer sau receipt)
+  const pendingPayloadsRef = useRef(null);
+  const pendingStripeMetaRef = useRef(null);
+  const pendingTipDistribRef = useRef(null); // null hoặc { totalTip, techGroups }
+  /** Tab navigator giữ màn hình đã mount — `router.push` lần 2 trở đi tới cùng route
+   * không cập nhật lại `params` (React Navigation chỉ JUMP_TO màn cũ với params cũ),
+   * nên chỉ áp dụng params nhân viên LẦN ĐẦU; các lần chọn nhân viên sau đó các màn
+   * điều hướng (PublicHomeScreen, appointments...) phải gọi thẳng `setStaff` trước khi push. */
+  const staffParamsAppliedRef = useRef(false);
   const testPayEnabled = useMemo(() => isPosTestPayEnabled(), []);
   const cardTerminalEnabled = isCardTerminalPaymentEnabled();
   const stripeEnabled = isStripePaymentEnabled();
@@ -223,7 +273,7 @@ export default function NewTicketScreen() {
   const [reconnectingReader, setReconnectingReader] = useState(false);
   const {
     collectPaymentMethod, retrievePaymentIntent, processPaymentIntent, cancelCollectPaymentMethod, connectedReader,
-    discoverReaders, connectReader, cancelDiscovering,
+    discoverReaders, connectReader, cancelDiscovering, setSimulatedCard: setSimCard,
   } = useStripeTerminal({
     onUpdateDiscoveredReaders: (readers) => {
       discoveredReadersRef.current = Array.isArray(readers) ? readers : (readers?.readers ?? []);
@@ -278,7 +328,14 @@ export default function NewTicketScreen() {
   // Lưu kết quả charge (đã thành công) để dùng khi khách ký tên xong — KHÔNG còn lưu PI
   // "đã chạm chưa charge" như trước, vì giờ chạm thẻ + charge chạy liền nhau (1 bước).
   const stripeChargeRef = useRef(null);
+  // Khác null khi đang ở luồng "Tiền mặt + Thẻ" — giữ {cashPortion, cardPortion} đã
+  // chốt từ CashPaymentModal để CardCheckoutModal (tip → processing → signature)
+  // và runSplitStripeCharge/finishSplitStripeReceipt biết cần charge phần thẻ nào.
+  const [splitContext, setSplitContext] = useState(null);
   const [terminalCollecting, setTerminalCollecting] = useState(false);
+  // Số tiền hiện đang chạm thẻ — KHÔNG dùng cardTotal trực tiếp vì luồng split chỉ
+  // charge phần thẻ (cardPortion), không phải tổng cardTotal của cả vé.
+  const [terminalCollectAmount, setTerminalCollectAmount] = useState(0);
   // Gợi ý hiển thị cho khách khi reader yêu cầu thao tác thêm GIỮA LÚC đang xử lý
   // (vd. chạm lại lần 2 để xác thực) — nếu không hiện cái này, khách đứng nhìn
   // màn "Đang xử lý thanh toán…" mà không biết phải làm gì → tưởng máy bị treo.
@@ -294,6 +351,8 @@ export default function NewTicketScreen() {
   }, [tabs, tab]);
 
   useEffect(() => {
+    if (staffParamsAppliedRef.current) return;
+    staffParamsAppliedRef.current = true;
     const raw = routeParamFirst(params.staffId);
     const name = routeParamFirst(params.staffName) || 'STAFF';
     if (raw !== '') {
@@ -435,10 +494,28 @@ export default function NewTicketScreen() {
     })();
   }, [testPayEnabled, services, lines.length]);
 
-  const filtered = useMemo(
-    () => services.filter((s) => s.category === tab),
-    [services, tab]
-  );
+  const filtered = useMemo(() => {
+    const q = foldText(serviceSearch.trim());
+    if (q) {
+      // Đang tìm kiếm — gộp kết quả từ TẤT CẢ danh mục, bỏ qua tab đang chọn,
+      // để nhân viên gõ vài chữ là ra ngay món cần (không phải đoán đúng tab trước).
+      return services.filter((s) => foldText(s.name).includes(q));
+    }
+    return services.filter((s) => s.category === tab);
+  }, [services, tab, serviceSearch]);
+
+  // Gom dịch vụ theo danh mục (giống thứ tự tab) — picker "Khoản tuỳ chỉnh" hiện
+  // tiêu đề danh mục để nhân viên biết ngay món mình cần thuộc nhóm nào, đỡ dò cả danh sách.
+  const customServicesByCategory = useMemo(() => {
+    const order = tabs.length ? tabs : POS_TAB_ORDER;
+    const groups = order
+      .map((cat) => ({ category: cat, items: services.filter((s) => s.category === cat) }))
+      .filter((g) => g.items.length > 0);
+    const known = new Set(order);
+    const rest = services.filter((s) => !known.has(s.category));
+    if (rest.length) groups.push({ category: 'Khác', items: rest });
+    return groups;
+  }, [services, tabs]);
 
   const subtotal = getSubtotal();
   const taxAmount = getTaxAmount();
@@ -515,10 +592,13 @@ export default function NewTicketScreen() {
       name: customName || 'CUSTOM',
       price: n,
       qty: 1,
-      serviceId: fallbackServiceId,
+      // Nếu staff chọn (các) dịch vụ gốc (vd. Fullset, có thể chọn nhiều) → dùng
+      // đúng serviceId của dịch vụ ĐẦU TIÊN để báo cáo doanh thu/hoa hồng tính đúng
+      // loại dịch vụ chính, dù giá thực tế (theo độ dài móng) khác giá niêm yết.
+      serviceId: customBaseServices[0]?.id ?? fallbackServiceId,
     });
     setAmountStr('');
-    setCustomName('CUSTOM');
+    resetCustomServicePicker();
     setCustomOpen(false);
   };
 
@@ -534,11 +614,11 @@ export default function NewTicketScreen() {
   }, [lines, staffId]);
 
   const buildLinePayloads = useCallback(
-    (method, date) => {
+    (method, date, customTipPerLine = null) => {
       const tip = usePosStore.getState().tip;
       const serviceBase = getCardFeeBase();
       const weights = lines.map((l) => Number(l.price) * (l.qty || 1));
-      const tipParts = splitByWeights(weights, tip);
+      const tipParts = customTipPerLine ?? splitByWeights(weights, tip);
       let svcParts;
       if (method === 'card') {
         const cardSvcTotal = Math.max(0, serviceBase * 1.03);
@@ -695,57 +775,215 @@ export default function NewTicketScreen() {
     finishCheckoutAndLeave();
   }, [buildLinePayloads, persistPayloadsToApi, finishCheckoutAndLeave, displayStaffName]);
 
+  /**
+   * Luồng "Tiền mặt + Thẻ" — CHẠM THẺ TRƯỚC cho đúng cardPortion (authorize, capture
+   * thủ công), rồi mới hỏi tip + ký tên, và CHỈ trừ tiền (capture cardPortion + tip)
+   * ở bước cuối — xem chú thích đầy đủ ở `startStripeCollection`.
+   */
   const onConfirmSplit = useCallback(async (cashPortion, cardPortion) => {
+    console.log('[PAY][SPLIT][1] onConfirmSplit cash=', cashPortion, 'card=', cardPortion,
+      '| collectPaymentMethod=', typeof collectPaymentMethod,
+      '| processPaymentIntent=', typeof processPaymentIntent,
+      '| connectedReader=', connectedReader?.serialNumber ?? 'null',
+      '| readerStatus=', connectedReader?.status ?? 'N/A',
+    );
     setCashModalOpen(false);
 
+    const ticketErr = validateTicketForPay();
+    if (ticketErr) {
+      console.log('[PAY][SPLIT][1] validateTicketForPay FAIL:', ticketErr);
+      Alert.alert('Ticket', ticketErr);
+      return;
+    }
     if (!collectPaymentMethod || !processPaymentIntent) {
+      console.error('[PAY][SPLIT][1] Stripe SDK hooks missing');
       Alert.alert('Stripe Terminal', 'Cần rebuild app (EAS Build) để dùng máy đọc thẻ.');
       return;
     }
     if (!connectedReader) {
+      console.warn('[PAY][SPLIT][1] no connected reader');
       setReaderModalOpen(true);
       return;
     }
 
-    const cardCents = Math.round(cardPortion * 100);
-    try {
-      // 1. Tạo PI cho phần thẻ
-      const { data } = await api.post('/api/stripe/terminal/payment-intent', {
-        amount_cents: cardCents,
-        description: `Split – card $${cardPortion.toFixed(2)} / cash $${cashPortion.toFixed(2)}`,
-      });
+    const proceed = async () => {
+      // Áp phí thẻ 3% vào phần thẻ — cùng tỷ lệ với luồng thẻ thường (getCardFeeBase * 1.03).
+      // cardPortion từ CashPaymentModal tính theo cashTotal (không có fee), nên phải cộng thêm ở đây.
+      let cardCents = Math.round(cardPortion * 1.03 * 100);
+      if (STRIPE_SIMULATED_READER) {
+        const DECLINE_TRIGGERS = new Set([0, 5, 46, 55, 65, 75, 95]);
+        if (DECLINE_TRIGGERS.has(cardCents % 100)) cardCents += 1;
+      }
+      const cardWithFee = cardCents / 100;
+      console.log('[PAY][SPLIT][2] proceed() cardPortion=', cardPortion, '→ cardWithFee=', cardWithFee, 'cardCents=', cardCents);
+      setSplitContext({ cashPortion, cardPortion });
+      try {
+        console.log('[PAY][SPLIT][2] POST /api/stripe/terminal/payment-intent cardCents=', cardCents);
+        const { data } = await api.post('/api/stripe/terminal/payment-intent', {
+          amount_cents: cardCents,
+          description: `Split – card $${cardWithFee.toFixed(2)} (incl. 3% fee) / cash $${cashPortion.toFixed(2)}`,
+          capture_method: 'manual_preferred',
+        });
+        console.log('[PAY][SPLIT][2] PI created id=', data?.paymentIntentId);
 
-      const { paymentIntent: retrievedPI, error: retrieveErr } = await retrievePaymentIntent(data.clientSecret);
-      if (retrieveErr) { Alert.alert('Stripe Terminal', retrieveErr.message); return; }
+        console.log('[PAY][SPLIT][2] calling retrievePaymentIntent...');
+        const { paymentIntent: retrievedPI, error: retrieveErr } = await retrievePaymentIntent(data.clientSecret);
+        if (retrieveErr) {
+          console.error('[PAY][SPLIT][2] retrievePaymentIntent ERROR:', retrieveErr?.code, retrieveErr?.message);
+          Alert.alert('Stripe Terminal', retrieveErr.message);
+          return;
+        }
+        console.log('[PAY][SPLIT][2] retrievedPI status:', retrievedPI?.status, '| reader:', connectedReader?.serialNumber, connectedReader?.deviceType);
 
-      // 2. Chờ khách chạm thẻ
-      console.log('[StripeTerminal][split] retrievedPI status:', retrievedPI?.status, '| reader:', connectedReader?.serialNumber, connectedReader?.deviceType);
-      setCardReaderReady(false);
-      setCardProcessingHint(null);
-      armCardReaderReadyFallback();
-      setTerminalCollecting(true);
-      console.log('[StripeTerminal][split] calling collectPaymentMethod...');
-      const { paymentIntent: collectedPI, error: collectErr } = await collectPaymentMethod({ paymentIntent: retrievedPI });
-      console.log('[StripeTerminal][split] collectPaymentMethod resolved — status:', collectedPI?.status, '| error:', collectErr?.code, collectErr?.message);
-      clearCardReaderReadyFallback();
-      setTerminalCollecting(false);
+        if (!STRIPE_SIMULATED_READER && connectedReader?.status === 'offline') {
+          Alert.alert(
+            'Máy đọc thẻ OFFLINE',
+            'Máy "' + (connectedReader?.label || connectedReader?.serialNumber) + '" mất kết nối. Kiểm tra WiFi/4G rồi kết nối lại trước khi thử.',
+            [{ text: 'OK' }],
+          );
+          setSplitContext(null);
+          return;
+        }
 
-      if (collectErr) {
-        if (collectErr.code !== 'Canceled') Alert.alert('Stripe Terminal', collectErr.message);
+        setCardReaderReady(false);
+        setCardProcessingHint(null);
+        armCardReaderReadyFallback();
+        setTerminalCollectAmount(cardWithFee);
+        setTerminalCollecting(true);
+
+        // Force Visa test card khi dùng simulated reader — tránh amount-based declines
+        if (STRIPE_SIMULATED_READER && setSimCard) await setSimCard('4242424242424242');
+        console.log('[PAY][SPLIT][2] calling collectPaymentMethod...');
+        const { paymentIntent: collectedPI, error: collectErr } = await collectPaymentMethod({ paymentIntent: retrievedPI });
+        console.log('[PAY][SPLIT][2] collectPaymentMethod done — status:', collectedPI?.status, '| err:', collectErr?.code, collectErr?.message);
+        clearCardReaderReadyFallback();
+        setTerminalCollecting(false);
+
+        if (collectErr) {
+          setSplitContext(null);
+          console.warn('[PAY][SPLIT][2] collect cancelled/failed:', collectErr.code);
+          if (collectErr.code !== 'Canceled') Alert.alert('Stripe Terminal', collectErr.message);
+          return;
+        }
+
+        console.log('[PAY][SPLIT][2] card tapped — authorize. Opening processing modal...');
+        setCardCheckoutMode('processing');
+        setCardCheckoutOpen(true);
+        setCardProcessingHint(null);
+
+        if (STRIPE_SIMULATED_READER && setSimCard) await setSimCard('4242424242424242');
+        console.log('[PAY][SPLIT][2] calling processPaymentIntent...');
+        const { paymentIntent: confirmedPI, error: processErr } = await processPaymentIntent({ paymentIntent: collectedPI });
+        setCardProcessingHint(null);
+        console.log('[PAY][SPLIT][2] processPaymentIntent done — status:', confirmedPI?.status, '| err:', processErr?.code, processErr?.message);
+
+        if (processErr) {
+          setCardCheckoutOpen(false);
+          setSplitContext(null);
+          console.error('[PAY][SPLIT][2] process error:', processErr.code, processErr.message);
+          Alert.alert('Stripe Terminal', processErr.message);
+          return;
+        }
+
+        // SDK trả camelCase — 'requiresCapture', không phải 'requires_capture'
+        const isManualCapture = confirmedPI?.status === 'requiresCapture';
+        console.log('[PAY][SPLIT][2] AUTHORIZED OK — piId:', data.paymentIntentId,
+          'status:', confirmedPI?.status, '| isManualCapture:', isManualCapture, '| opening tip modal');
+        stripeChargeRef.current = {
+          confirmedPI, piId: data.paymentIntentId, baseAmount: cardWithFee, tipAmount: 0, isSplit: true, isManualCapture,
+        };
+        setCardCheckoutMode('tip');
+      } catch (e) {
+        console.error('[PAY][SPLIT][2] CRASH —', e?.message, '\nStack:', e?.stack);
+        clearCardReaderReadyFallback();
+        setTerminalCollecting(false);
+        setCardProcessingHint(null);
+        setCardCheckoutOpen(false);
+        setSplitContext(null);
+        Alert.alert('Stripe Terminal', e?.response?.data?.error || e?.message || 'Lỗi Stripe Terminal.');
+      }
+    };
+
+    if (connectedReader.status === 'offline') {
+      console.warn('[PAY][SPLIT][1] reader offline — showing warning');
+      Alert.alert(
+        'Máy đọc thẻ đang OFFLINE',
+        'Máy "' + (connectedReader.label || connectedReader.serialNumber) + '" hiện không kết nối được với Stripe (mất mạng/wifi). ' +
+        'Nếu tiếp tục, màn "Chạm thẻ" có thể đứng yên mãi dù khách đã chạm.\n\n' +
+        'Hãy kiểm tra WiFi/4G, sau đó vào Cài đặt → Thiết bị để kết nối lại trước khi thử lại.',
+        [
+          { text: 'Để sau', style: 'cancel' },
+          { text: 'Vẫn tiếp tục', style: 'destructive', onPress: proceed },
+        ],
+      );
+      return;
+    }
+
+    await proceed();
+  }, [
+    validateTicketForPay, collectPaymentMethod, processPaymentIntent, connectedReader,
+    armCardReaderReadyFallback, clearCardReaderReadyFallback, retrievePaymentIntent, setSimCard,
+  ]);
+
+  /** Bước cuối luồng split — khách đã chọn tip + ký tên: CAPTURE (cardPortion + tip), lưu hoá đơn 'split'. */
+  const finishSplitStripeReceipt = useCallback(async (signaturePaths) => {
+    const charged = stripeChargeRef.current;
+    stripeChargeRef.current = null;
+    const ctx = splitContext;
+    setSplitContext(null);
+    console.log('[PAY][SPLIT][3] finishSplitStripeReceipt — charged piId=', charged?.piId,
+      'isSplit=', charged?.isSplit, 'baseAmount=', charged?.baseAmount, 'tipAmount=', charged?.tipAmount,
+      'ctx cash=', ctx?.cashPortion, 'ctx card=', ctx?.cardPortion,
+      'signaturePaths count=', signaturePaths?.length,
+    );
+    if (!charged?.isSplit || !ctx) {
+      console.error('[PAY][SPLIT][3] missing charged or ctx');
+      Alert.alert('Lỗi', 'Không có dữ liệu giao dịch. Vui lòng thử lại.');
+      return;
+    }
+
+    const { piId, baseAmount: cardPortion, isManualCapture } = charged;
+    const { cashPortion } = ctx;
+    const tipAmount = isManualCapture ? charged.tipAmount : 0;
+    const captureCents = Math.round((cardPortion + tipAmount) * 100);
+    console.log('[PAY][SPLIT][3] capture piId=', piId, 'isManualCapture=', isManualCapture, 'captureCents=', captureCents);
+
+    setCardCheckoutMode('processing');
+    setCardCheckoutOpen(true);
+    setCardProcessingHint(null);
+
+    if (isManualCapture) {
+      try {
+        console.log('[PAY][SPLIT][3] POST /capture...');
+        const { data } = await api.post(`/api/stripe/terminal/payment-intent/${piId}/capture`, {
+          amount_to_capture: captureCents,
+        });
+        console.log('[PAY][SPLIT][3] capture OK status=', data?.status, 'amountReceived=', data?.amountReceived);
+      } catch (e) {
+        console.error('[PAY][SPLIT][3] capture FAILED —', e?.response?.data?.error ?? e?.message);
+        setCardCheckoutOpen(false);
+        Alert.alert(
+          'Stripe Terminal',
+          e?.response?.data?.error || e?.message || 'Lỗi khi trừ tiền thẻ — kiểm tra lại trước khi thử tính tiền lại.',
+        );
         return;
       }
+    } else {
+      console.warn('[PAY][SPLIT][3] PI đã succeeded (auto-capture) — bỏ qua /capture, tip không tính');
+    }
 
-      // 3. Process thẻ
-      const { paymentIntent: confirmedPI, error: processErr } = await processPaymentIntent({ paymentIntent: collectedPI });
-      if (processErr) { Alert.alert('Stripe Terminal', processErr.message); return; }
+    try {
+      const store = usePosStore.getState();
+      store.setTip(tipAmount);
+      const card = charged.confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present || {};
+      const receiptDetails = charged.confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present?.receipt || {};
+      console.log('[PAY][SPLIT][3] card brand=', card.brand, 'last4=', card.last4);
 
-      // 4. Lưu DB với Stripe meta + ghi chú split
+      console.log('[PAY][SPLIT][3] building payloads and persisting...');
       const date = getSalonDateYmd();
       const payloads = buildLinePayloads('cash', date);
-      const card = confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present || {};
-      const receiptDetails = confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present?.receipt || {};
       const stripeMeta = {
-        stripePaymentIntentId: confirmedPI?.id || data.paymentIntentId,
+        stripePaymentIntentId: piId,
         stripeCardBrand: card.brand || undefined,
         stripeCardLast4: card.last4 || undefined,
         paymentStatus: 'approved',
@@ -755,23 +993,24 @@ export default function NewTicketScreen() {
         body: {
           ...p.body,
           notes: i === 0
-            ? `${p.body.notes}|split:cash:${cashPortion.toFixed(2)}:card:${cardPortion.toFixed(2)}`
+            ? `${p.body.notes}|split:cash:${cashPortion.toFixed(2)}:card:${cardPortion.toFixed(2)}:tip:${tipAmount.toFixed(2)}`
             : p.body.notes,
         },
       }));
+
       const ok = await persistPayloadsToApi(payloadsWithSplit, stripeMeta);
+      console.log('[PAY][SPLIT][3] persistPayloadsToApi result=', ok);
       if (ok) {
-        const store = usePosStore.getState();
         cardReceiptRef.current = {
           paymentMethod: 'split',
           lines: [...store.lines],
           subtotal: store.getSubtotal(),
           taxAmount: store.getTaxAmount(),
-          tip: store.tip,
-          total: store.getCashTotal(),
+          tip: tipAmount,
+          total: cashPortion + cardPortion + tipAmount,
           staffName: displayStaffName || '',
           date: format(new Date(), 'dd/MM/yyyy HH:mm'),
-          signaturePaths: [],
+          signaturePaths: signaturePaths ?? [],
           cashPortion,
           cardPortion,
           cardBrand: card.brand || '',
@@ -779,96 +1018,155 @@ export default function NewTicketScreen() {
           entryMode: card.entry_mode || 'contactless',
           authCode: receiptDetails.authorization_code || '',
           aidLabel: receiptDetails.application_preferred_name || '',
+          aid: receiptDetails.dedicated_file_name || '',
         };
+        setCardCheckoutOpen(false);
         finishCheckoutAndLeave();
+      } else {
+        cardReceiptRef.current = null;
+        Alert.alert('Lỗi', 'Thẻ đã charge thành công nhưng không lưu được đơn. Liên hệ quản lý.');
       }
-    } catch (e) {
-      clearCardReaderReadyFallback();
-      setTerminalCollecting(false);
-      Alert.alert('Stripe Terminal', e?.response?.data?.error || e?.message || 'Lỗi Stripe Terminal.');
+    } catch (err) {
+      console.error('[PAY][SPLIT][3] unexpected error —', err?.message, err?.stack);
+      setCardCheckoutOpen(false);
+      Alert.alert('Lỗi', err?.message || 'Lỗi không xác định khi lưu hoá đơn.');
     }
-  }, [
-    collectPaymentMethod, processPaymentIntent, connectedReader, armCardReaderReadyFallback, clearCardReaderReadyFallback,
-    retrievePaymentIntent, buildLinePayloads, persistPayloadsToApi, finishCheckoutAndLeave, displayStaffName,
-  ]);
+  }, [splitContext, displayStaffName, buildLinePayloads, persistPayloadsToApi, finishCheckoutAndLeave]);
 
   /**
-   * Luồng thẻ Stripe — CHỐT số tiền (gồm tip) TRƯỚC khi yêu cầu khách chạm thẻ.
-   * Bắt buộc phải làm vậy vì giao dịch card-present (chạm/cắm/quẹt) khoá số tiền
-   * vào cryptogram của thẻ ngay tại thời điểm đọc thẻ — không thể đổi amount sau đó
-   * (kể cả PATCH PaymentIntent trên Stripe cũng bị từ chối ở bước confirm/capture).
-   * Vì vậy: hỏi tip → tạo PaymentIntent đúng tổng tiền cuối → chạm thẻ → charge → ký tên.
+   * Luồng thẻ Stripe — CHẠM THẺ TRƯỚC, hỏi tip + ký tên SAU, rồi mới TRỪ TIỀN.
+   * PI tạo cho base (service + phí 3%) với capture_method: 'manual_preferred':
+   * chạm thẻ chỉ AUTHORIZE (giữ tiền, chưa trừ). Sau khi khách chọn tip + ký tên,
+   * gọi /capture với amount_to_capture = base + tip (overcapture tới 50%/$50).
    */
-  const runStripeCharge = useCallback(async (tipAmount) => {
+  const startStripeCollection = useCallback(async () => {
     const store = usePosStore.getState();
-    store.setTip(tipAmount);
-    const serviceFeeAmt = Math.round(store.getCardFeeBase() * 1.03 * 100);
-    const totalCents = serviceFeeAmt + Math.round((Number(tipAmount) || 0) * 100);
+    const cardFeeBase = store.getCardFeeBase();
+    let baseCents = Math.round(cardFeeBase * 1.03 * 100);
+    // Tránh amount-based decline triggers của Stripe test mode (chỉ áp dụng khi dùng simulated reader).
+    // Stripe Terminal kích hoạt decline dựa trên 2 chữ số cuối cents: 00→do_not_honor, 05→card_declined,
+    // 55→incorrect_pin, 65→expired_card, 75→processing_error, 95→card_velocity_exceeded.
+    if (STRIPE_SIMULATED_READER) {
+      const DECLINE_TRIGGERS = new Set([0, 5, 46, 55, 65, 75, 95]);
+      if (DECLINE_TRIGGERS.has(baseCents % 100)) baseCents += 1;
+    }
+    const baseAmount = baseCents / 100;
 
-    // Đóng màn chọn Tip lại — màn "Chạm thẻ ngay" (StripeTerminalPaymentModal) sẽ
-    // hiện thay thế. Mở lại CardCheckoutModal (mode='processing' rồi 'signature')
-    // sau khi chạm xong, tránh 2 modal full-screen chồng lên nhau.
-    setCardCheckoutOpen(false);
+    console.log('[PAY][3] startStripeCollection —',
+      'cardFeeBase=', cardFeeBase,
+      'baseAmount=', baseAmount,
+      'baseCents=', baseCents,
+      'lines=', lines?.length,
+    );
+
+    stripeChargeRef.current = null;
+    setSplitContext(null);
 
     try {
+      console.log('[PAY][3] POST /api/stripe/terminal/payment-intent baseCents=', baseCents);
       const { data } = await api.post('/api/stripe/terminal/payment-intent', {
-        amount_cents: totalCents,
+        amount_cents: baseCents,
         description: lines.map((l) => `${l.name}:${l.price}`).join('; ').slice(0, 500),
+        capture_method: 'manual_preferred',
       });
+      console.log('[PAY][3] PI created — id=', data?.paymentIntentId, 'clientSecret starts:', data?.clientSecret?.slice(0, 20));
 
+      console.log('[PAY][3] calling retrievePaymentIntent...');
       const { paymentIntent: retrievedPI, error: retrieveErr } = await retrievePaymentIntent(data.clientSecret);
       if (retrieveErr) {
+        console.error('[PAY][3] retrievePaymentIntent ERROR:', retrieveErr?.code, retrieveErr?.message);
         Alert.alert('Stripe Terminal', retrieveErr.message);
         return;
       }
+      console.log('[PAY][3] retrievedPI status:', retrievedPI?.status, '| id:', retrievedPI?.id);
 
-      console.log('[StripeTerminal] retrievedPI status:', retrievedPI?.status, '| reader:', connectedReader?.serialNumber, connectedReader?.deviceType);
+      console.log('[PAY][3] reader:', connectedReader?.serialNumber, connectedReader?.deviceType, 'status:', connectedReader?.status);
+
+      // Chặn cứng với reader THẬT khi offline — native SDK crash (không phải JS error), try/catch không bắt được.
+      // Bỏ qua khi STRIPE_SIMULATED_READER vì simulator luôn báo status='offline' dù vẫn hoạt động được.
+      if (!STRIPE_SIMULATED_READER && connectedReader?.status === 'offline') {
+        Alert.alert(
+          'Máy đọc thẻ OFFLINE',
+          'Máy "' + (connectedReader?.label || connectedReader?.serialNumber) + '" mất kết nối với Stripe.\n\nKiểm tra WiFi/4G rồi vào Cài đặt → Thiết bị ngắt và kết nối lại máy đọc thẻ.',
+          [{ text: 'OK' }],
+        );
+        return;
+      }
+
       setCardReaderReady(false);
       setCardProcessingHint(null);
       armCardReaderReadyFallback();
+      setTerminalCollectAmount(baseAmount);
       setTerminalCollecting(true);
-      console.log('[StripeTerminal] calling collectPaymentMethod...');
+
+      // Force Visa test card khi dùng simulated reader — tránh amount-based declines (incorrect_pin, v.v.)
+      console.log('[PAY][3] setSimCard — SIMULATED=', STRIPE_SIMULATED_READER, 'fn=', typeof setSimCard);
+      if (STRIPE_SIMULATED_READER && setSimCard) {
+        const { error: simErr } = (await setSimCard('4242424242424242')) || {};
+        if (simErr) console.warn('[PAY][3] setSimCard error:', simErr.code, simErr.message);
+        else console.log('[PAY][3] setSimCard OK → 4242');
+      }
+      console.log('[PAY][3] calling collectPaymentMethod...');
       const { paymentIntent: collectedPI, error: collectErr } = await collectPaymentMethod({ paymentIntent: retrievedPI });
-      console.log('[StripeTerminal] collectPaymentMethod resolved — status:', collectedPI?.status, '| error:', collectErr?.code, collectErr?.message);
+      console.log('[PAY][3] collectPaymentMethod done — status:', collectedPI?.status, '| err:', collectErr?.code, collectErr?.message);
       clearCardReaderReadyFallback();
       setTerminalCollecting(false);
 
       if (collectErr) {
+        console.warn('[PAY][3] collect cancelled/failed:', collectErr.code, collectErr.message);
         if (collectErr.code !== 'Canceled') Alert.alert('Stripe Terminal', collectErr.message);
         return;
       }
 
-      // Thẻ đã chạm — mở lại CardCheckoutModal ở chế độ "đang xử lý" rồi charge ngay
-      // (đúng tổng tiền đã chốt từ đầu, gồm tip)
+      console.log('[PAY][3] card tapped — authorize (manual capture). Opening processing modal...');
       setCardCheckoutMode('processing');
       setCardCheckoutOpen(true);
       setCardProcessingHint(null);
+
+      // Set lại trước processPaymentIntent — lần tap thứ 2 (PIN/verify) cũng cần card 4242
+      if (STRIPE_SIMULATED_READER && setSimCard) await setSimCard('4242424242424242');
+      console.log('[PAY][3] calling processPaymentIntent...');
       const { paymentIntent: confirmedPI, error: processErr } = await processPaymentIntent({ paymentIntent: collectedPI });
       setCardProcessingHint(null);
+      console.log('[PAY][3] processPaymentIntent done — status:', confirmedPI?.status, '| err:', processErr?.code, processErr?.message);
 
       if (processErr) {
         setCardCheckoutOpen(false);
+        console.error('[PAY][3] process error:', processErr.code, processErr.message);
         Alert.alert('Stripe Terminal', processErr.message);
         return;
       }
 
-      // Charge thành công — lưu kết quả rồi chuyển sang bước Ký tên (modal vẫn đang mở)
-      stripeChargeRef.current = { confirmedPI, piId: data.paymentIntentId, tipAmount };
-      setCardCheckoutMode('signature');
+      // SDK trả camelCase — 'requiresCapture', không phải 'requires_capture'
+      // requiresCapture = manual_preferred OK → capture sau với base + tip
+      // succeeded       = fallback auto-capture → tiền đã trừ tại baseAmount, tip = 0
+      const isManualCapture = confirmedPI?.status === 'requiresCapture';
+      console.log('[PAY][3] AUTHORIZED OK — piId:', data.paymentIntentId,
+        'status:', confirmedPI?.status, '| isManualCapture:', isManualCapture, '| opening tip modal');
+      stripeChargeRef.current = { confirmedPI, piId: data.paymentIntentId, baseAmount, tipAmount: 0, isManualCapture };
+      setCardCheckoutMode('tip');
     } catch (e) {
+      console.error('[PAY][3] CRASH in startStripeCollection —', e?.message, '\nStack:', e?.stack);
       clearCardReaderReadyFallback();
       setTerminalCollecting(false);
       setCardProcessingHint(null);
       setCardCheckoutOpen(false);
       Alert.alert('Stripe Terminal', e?.response?.data?.error || e?.message || 'Lỗi Stripe Terminal.');
     }
-  }, [lines, collectPaymentMethod, retrievePaymentIntent, processPaymentIntent, connectedReader, armCardReaderReadyFallback, clearCardReaderReadyFallback]);
+  }, [lines, collectPaymentMethod, retrievePaymentIntent, processPaymentIntent, connectedReader, armCardReaderReadyFallback, clearCardReaderReadyFallback, setSimCard]);
 
-  // Bước 1: mở màn chọn Tip TRƯỚC khi chạm thẻ
-  const startStripeCollection = useCallback(() => {
-    setCardCheckoutMode('tip');
-    stripeChargeRef.current = null;
-    setCardCheckoutOpen(true);
+  // Thẻ đã AUTHORIZE — khách chọn tip xong: ghi nhận rồi chuyển sang ký tên.
+  // Tiền thực tế chỉ bị trừ một lần duy nhất ở bước /capture (finishStripeReceipt / finishSplitStripeReceipt).
+  const onCardTipChosen = useCallback((tipAmount) => {
+    const charged = stripeChargeRef.current;
+    console.log('[PAY][4] onCardTipChosen tipAmount=', tipAmount, '| charged piId=', charged?.piId);
+    if (!charged) {
+      console.error('[PAY][4] stripeChargeRef.current is null — cannot record tip');
+      return;
+    }
+    charged.tipAmount = Number(tipAmount) || 0;
+    console.log('[PAY][4] tip recorded, switching to signature mode');
+    setCardCheckoutMode('signature');
   }, []);
 
   // Kept for StripeReaderModal "onConnect" callback (không dùng nữa nhưng giữ để tránh lỗi ref)
@@ -972,55 +1270,175 @@ export default function NewTicketScreen() {
     onHelcimPaid,
   ]);
 
-  // Bước cuối: thẻ đã charge xong (đúng tổng tiền gồm tip) — khách ký tên, lưu hoá đơn
+  // Bước cuối: thẻ đã được AUTHORIZE (chưa trừ tiền) — khách đã chọn tip + ký tên,
+  // giờ mới CAPTURE đúng số cuối (base + tip), rồi lưu hoá đơn.
   const finishStripeReceipt = useCallback(async (signaturePaths) => {
     const charged = stripeChargeRef.current;
     stripeChargeRef.current = null;
+    console.log('[PAY][5] finishStripeReceipt — charged piId=', charged?.piId,
+      'baseAmount=', charged?.baseAmount, 'tipAmount=', charged?.tipAmount,
+      'signaturePaths count=', signaturePaths?.length);
     if (!charged) {
+      console.error('[PAY][5] stripeChargeRef.current is null');
       Alert.alert('Lỗi', 'Không có dữ liệu giao dịch. Vui lòng thử lại.');
       return;
     }
 
-    const { confirmedPI, piId, tipAmount } = charged;
-    const store = usePosStore.getState();
-    const card = confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present || {};
-    const receiptDetails = confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present?.receipt || {};
+    const { piId, baseAmount, isManualCapture } = charged;
+    // tipToDisplay: luôn lấy tip user đã chọn — hiển thị và lưu DB dù capture kiểu nào
+    // tipToCapture: chỉ cộng vào /capture khi isManualCapture=true (PI ở requiresCapture)
+    //              nếu PI đã auto-capture (succeeded), thẻ đã trừ tại baseAmount → không overcapture
+    const tipToDisplay = charged.tipAmount || 0;
+    const tipToCapture = isManualCapture ? tipToDisplay : 0;
+    const captureCents = Math.round((baseAmount + tipToCapture) * 100);
+    console.log('[PAY][5] capture — piId=', piId, 'isManualCapture=', isManualCapture,
+      'confirmedStatus=', charged.confirmedPI?.status,
+      'tipToDisplay=', tipToDisplay, 'tipToCapture=', tipToCapture,
+      'captureCents=', captureCents);
 
-    cardReceiptRef.current = {
-      paymentMethod: 'card',
-      lines: [...store.lines],
-      subtotal: store.getSubtotal(),
-      taxAmount: store.getTaxAmount(),
-      tip: tipAmount,
-      total: store.getCardTotal(),
-      staffName: displayStaffName || '',
-      date: format(new Date(), 'dd/MM/yyyy HH:mm'),
-      signaturePaths: signaturePaths ?? [],
-      cardBrand: card.brand || '',
-      cardLast4: card.last4 || '',
-      entryMode: card.entry_mode || 'contactless',
-      authCode: receiptDetails.authorization_code || '',
-      aidLabel: receiptDetails.application_preferred_name || '',
-      aid: receiptDetails.dedicated_file_name || '',
-    };
+    setCardCheckoutMode('processing');
+    setCardCheckoutOpen(true);
+    setCardProcessingHint(null);
 
-    const date = getSalonDateYmd();
-    const payloads = buildLinePayloads('card', date);
-    const stripeMeta = {
-      stripePaymentIntentId: confirmedPI?.id || piId,
-      stripeCardBrand: card.brand || undefined,
-      stripeCardLast4: card.last4 || undefined,
-      paymentStatus: 'approved',
-    };
-    const ok = await persistPayloadsToApi(payloads, stripeMeta);
-    if (ok) {
+    let captureResult = null;
+    if (isManualCapture) {
+      try {
+        console.log('[PAY][5] POST /capture...');
+        const { data } = await api.post(`/api/stripe/terminal/payment-intent/${piId}/capture`, {
+          amount_to_capture: captureCents,
+        });
+        captureResult = data;
+        console.log('[PAY][5] capture OK — status=', captureResult?.status, 'amountReceived=', captureResult?.amountReceived);
+      } catch (e) {
+        console.error('[PAY][5] capture FAILED —', e?.response?.data?.error ?? e?.message, '\nStack:', e?.stack);
+        setCardCheckoutOpen(false);
+        Alert.alert(
+          'Stripe Terminal',
+          e?.response?.data?.error || e?.message || 'Lỗi khi trừ tiền thẻ — kiểm tra lại trước khi thử tính tiền lại.',
+        );
+        return;
+      }
+    } else {
+      console.warn('[PAY][5] PI auto-captured (status=' + charged.confirmedPI?.status + ') — tip hiển thị trên biên lai nhưng không charge thêm vào thẻ');
+    }
+
+    try {
+      const store = usePosStore.getState();
+      store.setTip(tipToDisplay);
+      // card info đọc từ PI được trả về lúc authorize (processPaymentIntent) — xem charged.confirmedPI
+      const card = charged.confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present || {};
+      const receiptDetails = charged.confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present?.receipt || {};
+      console.log('[PAY][5] card brand=', card.brand, 'last4=', card.last4);
+
+      cardReceiptRef.current = {
+        paymentMethod: 'card',
+        lines: [...store.lines],
+        subtotal: store.getSubtotal(),
+        taxAmount: store.getTaxAmount(),
+        tip: tipToDisplay,
+        total: baseAmount + tipToDisplay,
+        staffName: displayStaffName || '',
+        date: format(new Date(), 'dd/MM/yyyy HH:mm'),
+        signaturePaths: signaturePaths ?? [],
+        cardBrand: card.brand || '',
+        cardLast4: card.last4 || '',
+        entryMode: card.entry_mode || 'contactless',
+        authCode: receiptDetails.authorization_code || '',
+        aidLabel: receiptDetails.application_preferred_name || '',
+        aid: receiptDetails.dedicated_file_name || '',
+      };
+
+      // Build payloads với default tip split (theo tỉ lệ service) — có thể điều chỉnh sau
+      console.log('[PAY][5] building default payloads...');
+      const date = getSalonDateYmd();
+      const defaultPayloads = buildLinePayloads('card', date);
+      const stripeMeta = {
+        stripePaymentIntentId: captureResult?.paymentIntentId || piId,
+        stripeCardBrand: card.brand || undefined,
+        stripeCardLast4: card.last4 || undefined,
+        paymentStatus: 'approved',
+      };
+
+      // Nếu có 2+ tech và tip > 0 → defer phân chia tip cho quản lý sau khi biên lai đóng
+      const uniqueEids = [...new Set(lines.map((l) => String(l.employeeId ?? staffId)).filter(Boolean))];
+      if (uniqueEids.length >= 2 && tipToDisplay > 0) {
+        const techMap = {};
+        const techGroupsList = [];
+        lines.forEach((line, i) => {
+          const eid = String(line.employeeId ?? staffId);
+          // svcAmount per line đọc từ payload đã build (amount - tips = svc + fee)
+          const svcAmount = Math.round((defaultPayloads[i].body.amount - defaultPayloads[i].body.tips) * 100) / 100;
+          if (!techMap[eid]) {
+            techMap[eid] = {
+              techId: eid,
+              techName: (line.employeeName || staffName || `Tech ${eid}`).toUpperCase(),
+              serviceAmount: 0,
+              lineData: [],
+            };
+            techGroupsList.push(techMap[eid]);
+          }
+          techMap[eid].serviceAmount += svcAmount;
+          techMap[eid].lineData.push({ idx: i, svcAmount });
+        });
+        pendingTipDistribRef.current = { totalTip: tipToDisplay, techGroups: techGroupsList };
+      }
+
+      pendingPayloadsRef.current = defaultPayloads;
+      pendingStripeMetaRef.current = stripeMeta;
+
+      // Hiện biên lai cho khách — DB save sẽ xảy ra sau khi quản lý đóng biên lai
       setCardCheckoutOpen(false);
       finishCheckoutAndLeave();
-    } else {
-      cardReceiptRef.current = null;
-      Alert.alert('Lỗi', 'Thẻ đã charge thành công nhưng không lưu được đơn. Liên hệ quản lý.');
+    } catch (err) {
+      console.error('[PAY][5] unexpected error after capture —', err?.message, err?.stack);
+      setCardCheckoutOpen(false);
+      Alert.alert('Lỗi', err?.message || 'Lỗi không xác định khi lưu hoá đơn.');
     }
-  }, [displayStaffName, buildLinePayloads, persistPayloadsToApi, finishCheckoutAndLeave]);
+  }, [displayStaffName, buildLinePayloads, finishCheckoutAndLeave, lines, staffId, staffName]);
+
+  // Lưu DB sau khi quản lý xác nhận (hoặc bỏ qua) phân chia tip
+  const finalizePayments = useCallback(async (tipPerTechObj) => {
+    const payloads = pendingPayloadsRef.current;
+    const meta = pendingStripeMetaRef.current;
+    const tipDistrib = pendingTipDistribRef.current;
+    pendingPayloadsRef.current = null;
+    pendingStripeMetaRef.current = null;
+    pendingTipDistribRef.current = null;
+
+    if (!payloads || !meta) { router.back(); return; }
+
+    let finalPayloads = payloads;
+    if (tipPerTechObj && tipDistrib) {
+      // Tạo bản sao để không mutate ref
+      finalPayloads = payloads.map((p) => ({ ...p, body: { ...p.body } }));
+      tipDistrib.techGroups.forEach((tech) => {
+        const techTip = tipPerTechObj[tech.techId] ?? 0;
+        const lineWeights = tech.lineData.map((l) => l.svcAmount);
+        const lineTips = splitByWeights(lineWeights, techTip);
+        tech.lineData.forEach((ld, li) => {
+          const newTips = Math.round(lineTips[li] * 100) / 100;
+          finalPayloads[ld.idx].body.tips = newTips;
+          finalPayloads[ld.idx].body.amount = Math.round((ld.svcAmount + newTips) * 100) / 100;
+        });
+      });
+    }
+
+    const ok = await persistPayloadsToApi(finalPayloads, meta);
+    if (!ok) Alert.alert('Lỗi', 'Không lưu được đơn. Liên hệ quản lý.');
+    router.back();
+  }, [persistPayloadsToApi]);
+
+  const onTipDistribConfirm = useCallback((tipPerTechObj) => {
+    setTipDistribVisible(false);
+    setTipDistribConfig(null);
+    finalizePayments(tipPerTechObj);
+  }, [finalizePayments]);
+
+  const onTipDistribSkip = useCallback(() => {
+    setTipDistribVisible(false);
+    setTipDistribConfig(null);
+    finalizePayments(null);
+  }, [finalizePayments]);
 
   /**
    * Reader Bluetooth (M2) đã kết nối ở màn Cài đặt nhưng có thể bị rớt kết nối ngầm
@@ -1084,20 +1502,37 @@ export default function NewTicketScreen() {
   }, [discoverReaders, connectReader, cancelDiscovering]);
 
   const proceedCardCheckout = useCallback((method) => {
+    console.log('[PAY][2] proceedCardCheckout method=', method);
     const err = validateTicketForPay();
-    if (err) { Alert.alert('Ticket', err); setPaymentOpen(false); return; }
+    if (err) {
+      console.log('[PAY][2] validateTicketForPay FAIL:', err);
+      Alert.alert('Ticket', err);
+      setPaymentOpen(false);
+      return;
+    }
+    console.log('[PAY][2] validation OK');
     setCardCheckoutMethod(method);
     setPaymentOpen(false);
     if (method === 'stripe') {
-      startStripeCollection(); // chạm thẻ trước
+      console.log('[PAY][2] calling startStripeCollection()');
+      startStripeCollection();
     } else {
-      onPayCard(); // Helcim: gửi thẳng tới terminal
+      console.log('[PAY][2] calling onPayCard() (Helcim)');
+      onPayCard();
     }
   }, [validateTicketForPay, startStripeCollection, onPayCard]);
 
   const openCardCheckout = useCallback(async (method) => {
+    console.log('[PAY][1] openCardCheckout method=', method,
+      '| collectPaymentMethod=', typeof collectPaymentMethod,
+      '| processPaymentIntent=', typeof processPaymentIntent,
+      '| retrievePaymentIntent=', typeof retrievePaymentIntent,
+      '| connectedReader=', connectedReader?.serialNumber ?? 'null',
+      '| readerStatus=', connectedReader?.status ?? 'N/A',
+    );
     if (method === 'stripe') {
       if (!collectPaymentMethod || !processPaymentIntent) {
+        console.error('[PAY][1] Stripe SDK hooks missing — cần EAS build');
         Alert.alert('Stripe Terminal', 'Cần rebuild app (EAS Build) để dùng máy đọc thẻ.');
         setPaymentOpen(false);
         return;
@@ -1105,9 +1540,9 @@ export default function NewTicketScreen() {
 
       let reader = connectedReader;
       if (!reader) {
-        // Đã kết nối ở Cài đặt nhưng Bluetooth có thể đã rớt ngầm — thử tự kết nối lại
-        // trong nền trước, chỉ hiện màn "Chọn thiết bị" nếu thật sự thất bại.
+        console.log('[PAY][1] no reader — trying silent reconnect...');
         const reconnected = await attemptSilentReconnect();
+        console.log('[PAY][1] silent reconnect result:', reconnected);
         if (reconnected) {
           proceedCardCheckout(method);
           return;
@@ -1117,37 +1552,33 @@ export default function NewTicketScreen() {
         return;
       }
 
-      // Reader báo "offline" → SDK không thông được với Stripe để xử lý giao dịch,
-      // collectPaymentMethod() sẽ treo vô thời hạn dù khách có chạm thẻ.
-      // Cảnh báo TRƯỚC khi bắt khách chạm thẻ vô ích.
-      if (reader.status === 'offline') {
+      if (!STRIPE_SIMULATED_READER && reader.status === 'offline') {
+        console.warn('[PAY][1] reader offline:', reader.serialNumber);
+        setPaymentOpen(false);
         Alert.alert(
           'Máy đọc thẻ đang OFFLINE',
-          'Máy "' + (reader.label || reader.serialNumber) + '" hiện không kết nối được với Stripe (mất mạng/wifi). ' +
-          'Nếu tiếp tục, màn "Chạm thẻ" có thể đứng yên mãi dù khách đã chạm.\n\n' +
-          'Hãy kiểm tra WiFi/4G của điện thoại, sau đó vào Cài đặt → Thiết bị để ngắt và kết nối lại máy đọc thẻ trước khi thử lại.',
-          [
-            { text: 'Để sau', style: 'cancel', onPress: () => setPaymentOpen(false) },
-            { text: 'Vẫn tiếp tục', style: 'destructive', onPress: () => proceedCardCheckout(method) },
-          ],
+          'Máy "' + (reader.label || reader.serialNumber) + '" mất kết nối với Stripe.\n\n' +
+          'Kiểm tra WiFi/4G, sau đó vào Cài đặt → Thiết bị ngắt và kết nối lại máy đọc thẻ.',
+          [{ text: 'OK' }],
         );
         return;
       }
     }
     proceedCardCheckout(method);
-  }, [collectPaymentMethod, processPaymentIntent, connectedReader, attemptSilentReconnect, proceedCardCheckout]);
+  }, [collectPaymentMethod, processPaymentIntent, retrievePaymentIntent, connectedReader, attemptSilentReconnect, proceedCardCheckout]);
 
   // Chỉ Stripe dùng CardCheckoutModal (Helcim xử lý tip+sig trên máy vật lý).
   // Modal gọi onConfirm với 1 đối số duy nhất — kiểu dữ liệu phụ thuộc bước hiện tại:
-  //   mode='tip'        → onConfirm(tipAmount: number)        → chốt tip rồi mới chạm thẻ
-  //   mode='signature'  → onConfirm(signaturePaths: string[]) → đã charge xong, lưu hoá đơn
+  //   mode='tip'        → onConfirm(tipAmount: number)        → thẻ ĐÃ authorize, chỉ ghi nhận tip
+  //   mode='signature'  → onConfirm(signaturePaths: string[]) → ký xong, giờ mới CAPTURE (trừ tiền) + lưu hoá đơn
   const onCardCheckoutConfirm = useCallback((arg) => {
     if (cardCheckoutMode === 'tip') {
-      runStripeCharge(arg);
+      onCardTipChosen(arg);
     } else if (cardCheckoutMode === 'signature') {
-      finishStripeReceipt(arg);
+      if (splitContext) finishSplitStripeReceipt(arg);
+      else finishStripeReceipt(arg);
     }
-  }, [cardCheckoutMode, runStripeCharge, finishStripeReceipt]);
+  }, [cardCheckoutMode, splitContext, onCardTipChosen, finishStripeReceipt, finishSplitStripeReceipt]);
 
   const now = format(new Date(), 'HH:mm EEE MMM d');
 
@@ -1266,7 +1697,7 @@ export default function NewTicketScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator
           nestedScrollEnabled
-          style={{ width: '38%', maxWidth: 320, flexShrink: 0 }}
+          style={{ width: '32%', maxWidth: 280, flexShrink: 0 }}
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 12) }}
         >
           <TicketSummary
@@ -1294,14 +1725,39 @@ export default function NewTicketScreen() {
           className="flex-1 bg-white rounded-xl border border-neutral-200 overflow-hidden"
           style={{ minHeight: 0, minWidth: 0 }}
         >
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="max-h-14 border-b border-neutral-200">
+          <View className="flex-row items-center gap-2 px-3 py-2 border-b border-neutral-200 bg-neutral-50">
+            <Ionicons name="search" size={16} color="#9ca3af" />
+            <TextInput
+              value={serviceSearch}
+              onChangeText={setServiceSearch}
+              placeholder="Tìm dịch vụ theo tên…"
+              placeholderTextColor="#9ca3af"
+              className="flex-1 text-sm text-neutral-800"
+              style={{ paddingVertical: 6 }}
+              returnKeyType="search"
+              autoCorrect={false}
+            />
+            {serviceSearch ? (
+              <Pressable onPress={() => setServiceSearch('')} hitSlop={10}>
+                <Ionicons name="close-circle" size={18} color="#9ca3af" />
+              </Pressable>
+            ) : null}
+          </View>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="max-h-16 border-b border-neutral-200">
             <View className="flex-row items-end px-1">
               {tabs.map((c) => {
                 const active = c === tab;
                 return (
-                  <Pressable key={c} onPress={() => setTab(c)} className="px-3 py-3">
+                  <Pressable
+                    key={c}
+                    onPress={() => { setServiceSearch(''); setTab(c); }}
+                    hitSlop={6}
+                    className="px-4 py-4"
+                    style={({ pressed }) => (pressed ? { opacity: 0.6 } : null)}
+                  >
                     <Text
-                      className={`text-[10px] font-bold whitespace-nowrap ${
+                      className={`text-sm font-bold whitespace-nowrap ${
                         active ? 'text-neutral-900' : 'text-neutral-500'
                       }`}
                     >
@@ -1323,6 +1779,13 @@ export default function NewTicketScreen() {
             showsVerticalScrollIndicator
             nestedScrollEnabled
           >
+            {serviceSearch.trim() && filtered.length === 0 ? (
+              <View className="items-center py-10">
+                <Text className="text-sm text-neutral-400">
+                  Không tìm thấy dịch vụ nào khớp "{serviceSearch.trim()}"
+                </Text>
+              </View>
+            ) : null}
             <View className="flex-row flex-wrap">
               {filtered.map((s) => (
                 <ServiceButton
@@ -1368,8 +1831,11 @@ export default function NewTicketScreen() {
 
       <CardCheckoutModal
         visible={cardCheckoutOpen}
-        onClose={() => { if (cardCheckoutMode === 'tip') setCardCheckoutOpen(false); }}
-        subtotal={subtotal}
+        // Thẻ đã được AUTHORIZE (giữ tiền) trước khi modal này mở ở mode='tip' —
+        // không cho đóng nửa chừng nữa, phải hoàn tất tip → ký tên → capture
+        // (nếu không, khoản giữ tiền sẽ "treo" trên thẻ khách tới khi tự hết hạn).
+        onClose={() => {}}
+        subtotal={splitContext ? splitContext.cardPortion : terminalCollectAmount || subtotal}
         lockedTipAmount={stripeChargeRef.current?.tipAmount ?? 0}
         onConfirm={onCardCheckoutConfirm}
         mode={cardCheckoutMode}
@@ -1383,14 +1849,22 @@ export default function NewTicketScreen() {
         onDone={() => {
           setReceiptModalOpen(false);
           setReceiptModalData(null);
-          router.back();
+          const tipDistrib = pendingTipDistribRef.current;
+          if (tipDistrib) {
+            // Quản lý phân chia tip — hiện modal trước khi lưu DB
+            setTipDistribConfig(tipDistrib);
+            setTipDistribVisible(true);
+          } else {
+            // Không cần phân chia (1 tech hoặc không có tip) — lưu và thoát
+            finalizePayments(null);
+          }
         }}
       />
 
       <StripeTerminalPaymentModal
         visible={terminalCollecting}
         ready={cardReaderReady}
-        amount={cardTotal}
+        amount={terminalCollectAmount}
         readerName={connectedReader?.label || connectedReader?.serialNumber}
         onCancel={() => {
           cancelCollectPaymentMethod?.();
@@ -1405,6 +1879,14 @@ export default function NewTicketScreen() {
         visible={readerModalOpen}
         onClose={() => setReaderModalOpen(false)}
         onConnect={() => setReaderModalOpen(false)}
+      />
+
+      <TipDistributionModal
+        visible={tipDistribVisible}
+        totalTip={tipDistribConfig?.totalTip ?? 0}
+        techGroups={tipDistribConfig?.techGroups ?? []}
+        onConfirm={onTipDistribConfirm}
+        onSkip={onTipDistribSkip}
       />
 
       <Modal visible={reconnectingReader} animationType="fade" transparent>
@@ -1486,70 +1968,153 @@ export default function NewTicketScreen() {
       </Modal>
 
       <Modal visible={customOpen} animationType="fade" transparent>
-        <View className="flex-1 bg-black/40 flex-row">
-          <View className="w-[32%] bg-neutral-300 p-2 justify-end pb-8">
-            <View className="flex-row flex-wrap">
-              {NUM_KEYS.map((k) => (
-                <Pressable
-                  key={k}
-                  onPress={() => appendDigit(k)}
-                  className="w-[31%] aspect-[1.2] bg-neutral-200 m-0.5 rounded-lg items-center justify-center"
-                >
-                  <Text className="text-2xl font-bold">{k}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <View className="flex-row mt-2 gap-1">
-              <Pressable
-                onPress={() => setAmountStr((a) => a.slice(0, -1))}
-                className="flex-1 bg-neutral-400 rounded-lg py-3 items-center"
-              >
-                <Text className="font-bold">⌫</Text>
-              </Pressable>
-              <Pressable className="flex-1 bg-neutral-400 rounded-lg py-3 items-center">
-                <Text className="font-bold">Next</Text>
-              </Pressable>
-              <Pressable
-                onPress={() => setCustomOpen(false)}
-                className="flex-1 bg-neutral-400 rounded-lg py-3 items-center"
-              >
-                <Text className="font-bold">Close</Text>
-              </Pressable>
-            </View>
-          </View>
-          <View className="flex-1 justify-center items-center px-4">
-            <View className="bg-white rounded-2xl p-6 w-full max-w-md border border-neutral-200">
-              <Text className="text-sm text-neutral-600 mb-1">Service Name:</Text>
-              <TextInput
-                value={customName}
-                onChangeText={setCustomName}
-                className="border border-neutral-300 rounded-lg px-3 py-2 mb-4"
-              />
-              <Text className="text-sm text-neutral-600 mb-1">Amount:</Text>
-              <View className="border border-neutral-300 rounded-lg px-3 py-4 mb-4 min-h-[48px]">
-                <Text className="text-2xl">{amountStr || '|'}</Text>
+        <View className="flex-1 bg-black/50 justify-center items-center px-4">
+          {/* Bố cục NGANG — chọn dịch vụ bên trái, số tiền + bàn phím cố định bên phải.
+              Mọi thứ nằm trong tầm mắt/tay cùng lúc, không phải cuộn xuống mới thấy ô nhập tiền. */}
+          <View
+            className="bg-white rounded-2xl w-full max-w-3xl overflow-hidden flex-row"
+            style={{ height: '88%', maxHeight: 560 }}
+          >
+            {/* Cột trái — chọn (các) dịch vụ gốc + tên hiển thị */}
+            <View className="flex-1 border-r border-neutral-200">
+              <View className="flex-row items-center justify-between px-5 pt-5 pb-1">
+                <Text className="text-base font-extrabold text-neutral-800">Khoản tuỳ chỉnh</Text>
+                {customBaseServices.length > 0 ? (
+                  <Pressable onPress={resetCustomServicePicker} hitSlop={8}>
+                    <Text className="text-xs font-bold text-rose-500">Bỏ chọn tất cả</Text>
+                  </Pressable>
+                ) : null}
               </View>
-              <View className="flex-row gap-3">
+
+              <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 16 }}>
+                {/* Gắn đúng (các) dịch vụ gốc (vd. Fullset + Design) để báo cáo doanh thu
+                    chuẩn dù giá thực tế khác giá niêm yết (theo độ dài móng).
+                    Cho chọn NHIỀU — gom theo danh mục để biết ngay món cần thuộc nhóm nào,
+                    hiển thị to, dạng lưới để bấm dễ, không cuộn ngang. */}
+                <Text className="text-xs font-semibold text-neutral-500 mt-2 mb-1">
+                  Dịch vụ gốc (tuỳ chọn — chọn được nhiều)
+                </Text>
+                {customServicesByCategory.map((group) => (
+                  <View key={group.category}>
+                    <Text className="text-[11px] font-extrabold text-purple-400 uppercase mt-2.5 mb-1">
+                      {group.category}
+                    </Text>
+                    <View className="flex-row flex-wrap -m-1">
+                      {group.items.map((s) => {
+                        const active = customBaseServices.some((p) => p.id === s.id);
+                        return (
+                          <Pressable
+                            key={s.id}
+                            onPress={() => toggleCustomBaseService(s)}
+                            hitSlop={2}
+                            android_ripple={{ color: '#ddd6fe' }}
+                            style={({ pressed }) => [
+                              {
+                                opacity: pressed ? 0.7 : 1,
+                                backgroundColor: active ? '#7c3aed' : '#f3f4f6',
+                                borderWidth: 2,
+                                borderColor: active ? '#7c3aed' : '#e5e7eb',
+                              },
+                            ]}
+                            className="rounded-2xl px-4 py-4 m-1 flex-[1_1_45%] min-w-[130px] min-h-[64px] flex-row items-center justify-center gap-2"
+                          >
+                            {active ? <Ionicons name="checkmark-circle" size={18} color="#fff" /> : null}
+                            <Text
+                              className="text-base font-bold text-center"
+                              style={{ color: active ? '#fff' : '#374151' }}
+                              numberOfLines={2}
+                            >
+                              {s.name}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* Cột phải — số tiền + bàn phím (cuộn nếu thiếu chỗ) và HÀNG NÚT XÁC NHẬN
+                cố định ở đáy NGOÀI vùng cuộn — đảm bảo luôn thấy & bấm được nút THÊM/HUỶ
+                dù nội dung phía trên có cao hơn khung modal. */}
+            <View className="w-[320px]">
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 }}
+                keyboardShouldPersistTaps="handled"
+              >
+                <View className="flex-row items-center justify-between mb-2">
+                  <Text className="text-xs font-semibold text-neutral-500">Khoản tuỳ chỉnh</Text>
+                  <Pressable
+                    onPress={() => { setCustomOpen(false); resetCustomServicePicker(); setAmountStr(''); }}
+                    hitSlop={12}
+                  >
+                    <Ionicons name="close" size={22} color="#9ca3af" />
+                  </Pressable>
+                </View>
+
+                {/* Đặt cạnh số tiền — đây là 2 thứ staff cần nhìn thấy/chỉnh cuối cùng
+                    trước khi bấm THÊM, để cùng trong tầm mắt bên cột phải. */}
+                <Text className="text-xs font-semibold text-neutral-500 mb-1">
+                  Tên hiển thị trên hoá đơn
+                </Text>
+                <TextInput
+                  value={customName}
+                  onChangeText={(v) => { setCustomName(v); setCustomBaseServices([]); }}
+                  className="border border-neutral-300 rounded-lg px-3 py-2.5 text-sm mb-3"
+                />
+
+                <Text className="text-xs font-semibold text-neutral-500 mb-1">Số tiền</Text>
+                <View className="bg-neutral-50 border border-neutral-200 rounded-2xl py-4 items-center mb-3">
+                  <Text className="text-4xl font-extrabold text-neutral-900">
+                    ${amountStr || '0'}
+                  </Text>
+                </View>
+
+                <View className="gap-2">
+                  {NUMPAD_ROWS.map((row, ri) => (
+                    <View key={ri} className="flex-row gap-2">
+                      {row.map((k) => (
+                        <Pressable
+                          key={k}
+                          onPress={() => (k === '⌫' ? setAmountStr((a) => a.slice(0, -1)) : appendDigit(k))}
+                          hitSlop={4}
+                          style={({ pressed }) => [
+                            { opacity: pressed ? 0.6 : 1 },
+                          ]}
+                          className={`flex-1 aspect-[1.6] rounded-xl items-center justify-center ${
+                            k === '⌫' ? 'bg-neutral-200' : 'bg-neutral-100'
+                          }`}
+                        >
+                          <Text className="text-2xl font-bold text-neutral-800">{k}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+
+              <View className="flex-row gap-3 px-5 pt-2 pb-5 border-t border-neutral-100">
+                <Pressable
+                  onPress={() => { setCustomOpen(false); resetCustomServicePicker(); setAmountStr(''); }}
+                  className="flex-1 border-2 border-neutral-300 rounded-xl py-3.5 items-center"
+                >
+                  <Text className="font-bold text-neutral-600">HUỶ</Text>
+                </Pressable>
                 <Pressable
                   onPress={addCustomLine}
-                  className="flex-1 bg-[#2196F3] rounded-xl py-3 items-center"
+                  disabled={(parseFloat(amountStr) || 0) <= 0}
+                  style={({ pressed }) => [
+                    { opacity: pressed ? 0.7 : 1 },
+                    (parseFloat(amountStr) || 0) <= 0 ? { backgroundColor: '#d1d5db' } : { backgroundColor: '#7c3aed' },
+                  ]}
+                  className="flex-1 rounded-xl py-3.5 items-center"
                 >
-                  <Text className="text-white font-bold">DONE</Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => setCustomOpen(false)}
-                  className="flex-1 bg-primary rounded-xl py-3 items-center"
-                >
-                  <Text className="text-white font-bold">CANCEL</Text>
+                  <Text className="font-bold text-white">THÊM</Text>
                 </Pressable>
               </View>
             </View>
-          </View>
-          <View className="w-14 bg-neutral-200 items-center py-4 border-l border-neutral-300">
-            <Text className="text-[10px] text-neutral-500">{now}</Text>
-            <Text className="text-[10px] font-bold mt-4" style={{ transform: [{ rotate: '90deg' }] }}>
-              NEW TICKET
-            </Text>
           </View>
         </View>
       </Modal>

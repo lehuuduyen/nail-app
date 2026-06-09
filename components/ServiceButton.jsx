@@ -22,9 +22,14 @@ export default function ServiceButton({
   return (
     <Pressable
       onPress={onPress}
-      className="bg-neutral-200 rounded-lg px-2 py-3 m-1 flex-[1_1_45%] min-w-[140px] max-w-[48%]"
+      hitSlop={4}
+      android_ripple={{ color: '#d4d4d4' }}
+      style={({ pressed }) => [
+        { opacity: pressed ? 0.6 : 1 },
+      ]}
+      className="bg-neutral-200 rounded-lg px-2 py-4 m-1.5 min-h-[76px] justify-center flex-[1_1_45%] min-w-[140px] max-w-[48%]"
     >
-      <Text className="text-xs font-semibold text-center text-neutral-800 leading-snug">
+      <Text className="text-sm font-semibold text-center text-neutral-800 leading-snug">
         {name}
       </Text>
       {duration ? (

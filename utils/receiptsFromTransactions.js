@@ -1,4 +1,4 @@
-import { splitTransactionAmount } from './money';
+import { splitTransactionAmountForDisplay } from './money';
 import { formatEmployeeNameFromDb } from './staffDisplay';
 
 /** Chỉ dùng cho test / mock — không dùng trên màn POS thật. */
@@ -86,19 +86,19 @@ function isUnpaidStatus(tx) {
 }
 
 function mapToPaidRow(tx) {
-  const { total, tip } = splitTransactionAmount(tx);
+  const { withoutTip, tip } = splitTransactionAmountForDisplay(tx);
   const tipStr = tip > 0 ? tip.toFixed(2) : '';
   return {
     id: tx.id,
     paymentType: formatPaymentLine(tx),
-    total: total.toFixed(2),
+    total: withoutTip.toFixed(2),
     amountDue: tipStr,
     serviceBy: formatReceiptServiceBy(tx),
   };
 }
 
 function mapToUnpaidRow(tx) {
-  const { total } = splitTransactionAmount(tx);
+  const { total } = splitTransactionAmountForDisplay(tx);
   const svc = formatReceiptServiceBy(tx);
   return {
     id: tx.id,

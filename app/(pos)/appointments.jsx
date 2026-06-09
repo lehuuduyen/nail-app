@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../../api/client';
 import { fetchCatalogEmployees, fetchCatalogServices } from '../../api/catalog';
 import { useAuthStore } from '../../store/authStore';
+import { usePosStore } from '../../store/posStore';
 import {
   FALLBACK_EMPLOYEE_ROWS,
   buildAppointmentStaffCols,
@@ -285,14 +286,23 @@ export default function AppointmentsScreen() {
           {
             text: 'Chỉ mở vé POS',
             style: 'destructive',
-            onPress: () =>
+            onPress: () => {
+              const nameForTicket = staffName === 'ANYONE' ? 'STAFF' : staffName;
+              // Tab navigator giữ màn new-ticket đã mount — push lần 2 trở đi không
+              // cập nhật lại params (chỉ JUMP_TO màn cũ với params cũ), nên phải set
+              // thẳng vào store để màn luôn nhận đúng nhân viên vừa chọn.
+              usePosStore.getState().setStaff(
+                staffIdParam ? (Number.isFinite(Number(staffIdParam)) ? Number(staffIdParam) : staffIdParam) : null,
+                nameForTicket
+              );
               router.push({
                 pathname: '/(pos)/new-ticket',
                 params: {
                   ...(staffIdParam ? { staffId: staffIdParam } : {}),
-                  staffName: staffName === 'ANYONE' ? 'STAFF' : staffName,
+                  staffName: nameForTicket,
                 },
-              }),
+              });
+            },
           },
         ]
       );
@@ -311,18 +321,22 @@ export default function AppointmentsScreen() {
         { text: 'Đóng', style: 'cancel' },
         {
           text: 'Thanh toán POS (vé)',
-          onPress: () =>
+          onPress: () => {
+            const hasEmployeeId = a.employeeId != null && String(a.employeeId) !== '';
+            // Tab navigator giữ màn new-ticket đã mount — push lần 2 trở đi không
+            // cập nhật lại params (chỉ JUMP_TO màn cũ với params cũ), nên phải set
+            // thẳng vào store để màn luôn nhận đúng nhân viên của lịch hẹn này.
+            usePosStore.getState().setStaff(hasEmployeeId ? a.employeeId : null, tech);
             router.push({
               pathname: '/(pos)/new-ticket',
               params: {
-                ...(a.employeeId != null && String(a.employeeId) !== ''
-                  ? { staffId: String(a.employeeId) }
-                  : {}),
+                ...(hasEmployeeId ? { staffId: String(a.employeeId) } : {}),
                 staffName: tech,
                 appointmentId: String(a.id),
                 defaultTurnType: 'appointment',
               },
-            }),
+            });
+          },
         },
       ]
     );
@@ -368,8 +382,10 @@ export default function AppointmentsScreen() {
                 { text: 'Huỷ', style: 'cancel' },
                 {
                   text: 'Mở vé POS',
-                  onPress: () =>
-                    router.push({ pathname: '/(pos)/new-ticket', params: {} }),
+                  onPress: () => {
+                    usePosStore.getState().setStaff(null, null);
+                    router.push({ pathname: '/(pos)/new-ticket', params: {} });
+                  },
                 },
               ]
             )

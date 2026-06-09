@@ -148,7 +148,9 @@ export default function CardCheckoutModal({
     })
   ).current;
 
-  const canClose = mode === 'tip';
+  // Thẻ đã AUTHORIZE (giữ tiền) trước khi modal mở — không cho đóng ngang để tránh
+  // để lại khoản giữ tiền "treo" trên thẻ khách tới khi tự hết hạn.
+  const canClose = false;
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false}>

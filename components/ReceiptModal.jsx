@@ -187,7 +187,8 @@ ${svcLines}
 ${payDetail}
 <div>Note: </div>
 <div>TOTAL CHARGE: $${chargeAmt.toFixed(2)}</div>
-${tip > 0 ? `<div>Tip Added: $${tip.toFixed(2)}</div><div>GRAND TOTAL: $${(chargeAmt + tip).toFixed(2)}</div>` : ''}
+<div>Tip Added: $${tip.toFixed(2)}</div>
+<div><b>GRAND TOTAL: $${(chargeAmt + tip).toFixed(2)}</b></div>
 ${cardInfo}
 ${sigSection}
 ${tenderBlock}
@@ -328,12 +329,10 @@ export default function ReceiptModal({ visible, onDone, receiptData, signaturePa
 
             <Text style={styles.mono}>Note: </Text>
             <Text style={[styles.mono, { fontWeight: '700' }]}>TOTAL CHARGE: ${chargeAmt.toFixed(2)}</Text>
-            {tip > 0 && <Text style={styles.mono}>Tip Added: ${tip.toFixed(2)}</Text>}
-            {tip > 0 && (
-              <Text style={[styles.mono, { fontWeight: '900', fontSize: 15 }]}>
-                GRAND TOTAL: ${(chargeAmt + tip).toFixed(2)}
-              </Text>
-            )}
+            <Text style={styles.mono}>Tip Added: ${tip.toFixed(2)}</Text>
+            <Text style={[styles.mono, { fontWeight: '900', fontSize: 15, marginTop: 4 }]}>
+              GRAND TOTAL: ${(chargeAmt + tip).toFixed(2)}
+            </Text>
 
             {/* Card info */}
             {(isCard || isSplit) && cardLast4 ? (
