@@ -296,19 +296,20 @@ export default function NewTicketScreen() {
     // Consume both sources so a later appointment starts a separate draft.
     const local = useLocalTicketStore.getState();
     const request = local.openRequest;
+    const pos = usePosStore.getState();
+    const staffRequest = pos.pendingStaffRequest;
     const appointmentId = routeParamFirst(params.appointmentId);
     const isAppointment = /^\d+$/.test(appointmentId);
-    if (!request && !isAppointment && staffParamsAppliedRef.current) return;
+    if (!request && !staffRequest && !isAppointment && staffParamsAppliedRef.current) return;
     if (request && appliedOpenRef.current === request.nonce) return;
     const ticket = request?.id ? local.tickets.find((t) => t.id === request.id) : null;
     if (request?.id && !ticket) return;
-    const pos = usePosStore.getState();
     const rawStaffId = routeParamFirst(params.staffId);
     const routeStaffId = rawStaffId === '' ? null : Number.isFinite(Number(rawStaffId)) ? Number(rawStaffId) : rawStaffId;
     const defaultTurnType = routeParamFirst(params.defaultTurnType);
     const defaults = request ? request.defaults : {
-      staffId: pos.staffId ?? routeStaffId,
-      staffName: pos.staffName ?? (routeParamFirst(params.staffName) || null),
+      staffId: staffRequest ? staffRequest.staffId : pos.staffId ?? routeStaffId,
+      staffName: staffRequest ? staffRequest.staffName : pos.staffName ?? (routeParamFirst(params.staffName) || null),
       linkedAppointmentId: isAppointment ? Number(appointmentId) : null,
       turnType: isAppointment ? 'appointment' :
         TURN_TYPE_OPTIONS.some((t) => t.key === defaultTurnType) ? defaultTurnType :
@@ -320,12 +321,13 @@ export default function NewTicketScreen() {
       pos.restoreLocalTicket(ticket.id, ticket.snapshot);
     } else {
       pos.clearTicket();
-      pos.setStaff(defaults.staffId ?? null, defaults.staffName ?? null);
+      pos.setStaff(defaults.staffId ?? null, defaults.staffName ?? null, false);
     }
     observedGenerationRef.current = usePosStore.getState().ticketGeneration;
     const snapshot = ticket ? JSON.parse(JSON.stringify(ticket.snapshot)) : defaults;
     // Clear consumed navigation metadata before the request subscription rerenders.
     router.setParams({ appointmentId: '', defaultTurnType: '', staffId: '', staffName: '', suggestedEmployeeId: '' });
+    if (staffRequest) pos.consumeStaffRequest(staffRequest.nonce);
     if (request) local.consumeOpen(request.nonce);
     setSelectedCustomer(snapshot.selectedCustomer ?? null);
     setTurnType(snapshot.turnType || 'walk_in');
@@ -539,7 +541,7 @@ export default function NewTicketScreen() {
         const mapped = mapApiEmployeeToPosStaff(first, 0);
         const st = usePosStore.getState();
         if (st.lines.length > 0 || st.localTicketId || useLocalTicketStore.getState().openRequest) return;
-        st.setStaff(mapped.id, mapped.name);
+        st.setStaff(mapped.id, mapped.name, false);
         st.addLine({
           name: firstSvc.name,
           price: firstSvc.price,

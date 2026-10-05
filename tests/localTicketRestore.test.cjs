@@ -108,3 +108,66 @@ test('Home → Appointment and receipt A → Appointment → Save detach ID and 
   params.appointmentId = '99'; local.getState().requestOpen('A'); focus(); focus();
   assert.equal(pos.getState().localTicketId, 'A'); assert.equal(values.LinkedAppointmentId, 42);
 });
+
+// Exercise the actual legacy navigation callbacks without changing Appointments.
+for (const button of ['Chỉ mở vé POS', 'Mở vé POS']) {
+  test(`Appointments ${button}: saved A → new ticket, repeated same staff, and no duplicate reset`, async () => {
+    const { createStore } = require('zustand/vanilla');
+    const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+    const pos = new Function('create', read('store/posStore.js').replace(/^import .*;\n/gm, '').replace('export const', 'const') + ';return usePosStore;')(createStore);
+    const utils = new Function(read('utils/localTickets.js').replaceAll('export ', '') + ';return {ticketSnapshot};')();
+    const snapshot = { lines: [{ id: 'line-A', serviceId: 1, name: 'A service', price: 40, qty: 2 }], staffId: 8, staffName: 'B',
+      taxEnabled: true, taxRate: 0.0825, tip: 5, discount: 2, customLabel: 'A',
+      selectedCustomer: { id: 3, name: 'Customer A' }, linkedAppointmentId: 42, turnType: 'appointment', pendingLineStaff: { id: 8 } };
+    const tickets = [{ id: 'A', snapshot }];
+    const original = JSON.stringify(tickets[0]);
+    const local = { tickets, openRequest: { id: 'A', nonce: 1 }, consumeOpen() { this.openRequest = null; },
+      async save(id, data, total) { tickets.push({ id, snapshot: data, total }); } };
+    const values = {}; const params = {};
+    const setters = Object.fromEntries(['SelectedCustomer','TurnType','LinkedAppointmentId','PendingLineStaff','CustomOpen','SvcPriceModal','CustomerModalOpen','TechModalOpen','DiscountOpen','TipOpen','DiscountInput','TipInput','AmountStr','CustomBaseServices','CustomName'].map((key) => [`set${key}`, (v) => { values[key] = v; }]));
+    const bindings = { usePosStore: pos, useLocalTicketStore: { getState: () => local }, params,
+      router: { setParams: (next) => Object.assign(params, next) }, routeParamFirst: (v) => String(v ?? ''),
+      TURN_TYPE_OPTIONS: [{ key: 'appointment' }], appliedOpenRef: { current: null }, staffParamsAppliedRef: { current: false }, observedGenerationRef: { current: 0 }, ...setters };
+    const expression = screen.body.body.find((n) => n.type === 'ExpressionStatement' && n.expression.callee?.name === 'useFocusEffect');
+    const focus = () => evaluate(expression.expression.arguments[0].arguments[0], bindings)();
+    const appointments = read('app/(pos)/appointments.jsx');
+    const tree = parser.parse(appointments, { sourceType: 'module', plugins: ['jsx'] });
+    let onPress;
+    function visit(node) {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'ObjectExpression' && node.properties.some((p) => p.key?.name === 'text' && p.value?.value === button)) {
+        onPress = node.properties.find((p) => p.key?.name === 'onPress').value;
+      }
+      for (const value of Object.values(node)) if (Array.isArray(value)) value.forEach(visit); else if (value && typeof value === 'object') visit(value);
+    }
+    visit(tree); assert.ok(onPress);
+    const navigate = new Function('usePosStore', 'router', 'staffName', 'staffIdParam', `return (${appointments.slice(onPress.start, onPress.end)});`)(
+      pos, { push: () => {} }, 'B', '8'); // Mounted tab may retain params: do not rely on push updating them.
+    for (let i = 0; i < 2; i++) {
+      local.openRequest = { id: 'A', nonce: i + 2 }; focus();
+      assert.equal(pos.getState().localTicketId, 'A');
+      navigate();
+      const nonce = pos.getState().pendingStaffRequest.nonce;
+      focus();
+      assert.equal(pos.getState().localTicketId, null);
+      assert.deepEqual(pos.getState().lines, []);
+      assert.equal(pos.getState().staffId, button === 'Mở vé POS' ? null : 8);
+      assert.equal(values.SelectedCustomer, null); assert.equal(values.LinkedAppointmentId, null);
+      assert.equal(values.PendingLineStaff, null); assert.equal(values.TurnType, 'walk_in');
+      assert.equal(pos.getState().tip, 0); assert.equal(pos.getState().discount, 0);
+      assert.equal(pos.getState().taxEnabled, false); assert.equal(pos.getState().customLabel, '');
+      assert.equal(pos.getState().pendingStaffRequest, null);
+      pos.getState().addLine({ name: 'New service', price: 25 });
+      focus(); assert.equal(pos.getState().lines.length, 1);
+      const handler = evaluate(save, { ...bindings, saveBusyRef: { current: false }, setSaving: () => {},
+        newTicketId: () => `new-${nonce}`, ticketSnapshot: utils.ticketSnapshot,
+        selectedCustomer: values.SelectedCustomer, turnType: values.TurnType,
+        linkedAppointmentId: values.LinkedAppointmentId, pendingLineStaff: values.PendingLineStaff,
+        Alert: { alert: () => {} } });
+      await handler();
+      assert.equal(pos.getState().localTicketId, `new-${nonce}`);
+      assert.equal(JSON.stringify(tickets[0]), original);
+    }
+    assert.equal(new Set(tickets.map((t) => t.id)).size, 3);
+  });
+}

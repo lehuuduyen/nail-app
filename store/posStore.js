@@ -23,7 +23,20 @@ export const usePosStore = create((set, get) => ({
   tip: 0,
   discount: 0,
   customLabel: '',
-  setStaff: (staffId, staffName) => set({ staffId, staffName }),
+  // Legacy navigation callers (including both Appointments POS buttons) call
+  // setStaff before opening the mounted tab. Preserve that intent even for the
+  // same technician or null staff; staff equality is not a new-ticket signal.
+  staffRequestNonce: 0,
+  pendingStaffRequest: null,
+  setStaff: (staffId, staffName, startNewTicket = true) => set((s) => ({
+    staffId, staffName,
+    ...(startNewTicket ? {
+      staffRequestNonce: s.staffRequestNonce + 1,
+      pendingStaffRequest: { nonce: s.staffRequestNonce + 1, staffId, staffName },
+    } : {}),
+  })),
+  consumeStaffRequest: (nonce) => set((s) =>
+    s.pendingStaffRequest?.nonce === nonce ? { pendingStaffRequest: null } : {}),
   addLine: (line) =>
     set((s) => ({
       lines: [...s.lines, { ...line, id: `${Date.now()}-${Math.random()}` }],
