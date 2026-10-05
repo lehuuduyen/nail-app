@@ -32,6 +32,9 @@ import { SAMPLE_SERVICES, SAMPLE_STAFF } from '../../constants/sampleData';
 import { useLocalCatalogStore } from '../../store/localCatalogStore';
 import { usePosStore } from '../../store/posStore';
 
+import { useLocalTicketStore } from '../../store/localTicketStore';
+import { newTicketId, ticketSnapshot } from '../../utils/localTickets';
+
 const TURN_TYPE_OPTIONS = [
   { key: 'walk_in', label: 'Walk-in', color: '#4CAF50' },
   { key: 'customer_pick', label: 'Khách chọn', color: '#2196F3' },
@@ -211,7 +214,7 @@ export default function NewTicketScreen() {
   // setStaff() thẳng vào store TRƯỚC khi push nên luôn mới nhất; còn `params`
   // có thể bị "đứng hình" ở giá trị nhân viên ĐẦU TIÊN từng chọn trong phiên vì
   // Tab navigator chỉ JUMP_TO màn new-ticket đã mount thay vì cập nhật lại params.
-  const displayStaffName = staffName || routeParamFirst(params.staffName) || null;
+  const displayStaffName = staffName || null;
 
   const [tab, setTab] = useState(POS_TAB_ORDER[0]);
   const [serviceSearch, setServiceSearch] = useState('');
@@ -274,6 +277,70 @@ export default function NewTicketScreen() {
    * nên chỉ áp dụng params nhân viên LẦN ĐẦU; các lần chọn nhân viên sau đó các màn
    * điều hướng (PublicHomeScreen, appointments...) phải gọi thẳng `setStaff` trước khi push. */
   const staffParamsAppliedRef = useRef(false);
+  const openRequest = useLocalTicketStore((s) => s.openRequest);
+  const appliedOpenRef = useRef(null);
+  const saveBusyRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const ticketGeneration = usePosStore((s) => s.ticketGeneration);
+  const observedGenerationRef = useRef(ticketGeneration);
+  useEffect(() => {
+    if (observedGenerationRef.current === ticketGeneration) return;
+    observedGenerationRef.current = ticketGeneration;
+    setSelectedCustomer(null);
+    setTurnType('walk_in');
+    setLinkedAppointmentId(null);
+    setPendingLineStaff(null);
+  }, [ticketGeneration]);
+  useFocusEffect(useCallback(() => {
+    if (!openRequest || appliedOpenRef.current === openRequest.nonce) return;
+    const local = useLocalTicketStore.getState();
+    const ticket = openRequest.id ? local.tickets.find((t) => t.id === openRequest.id) : null;
+    if (openRequest.id && !ticket) return;
+    appliedOpenRef.current = openRequest.nonce;
+    staffParamsAppliedRef.current = true;
+    if (ticket) {
+      usePosStore.getState().restoreLocalTicket(ticket.id, ticket.snapshot);
+    } else {
+      usePosStore.getState().clearTicket();
+      usePosStore.getState().setStaff(openRequest.defaults.staffId ?? null, openRequest.defaults.staffName ?? null);
+    }
+    observedGenerationRef.current = usePosStore.getState().ticketGeneration;
+    const snapshot = ticket ? JSON.parse(JSON.stringify(ticket.snapshot)) : openRequest.defaults;
+    setSelectedCustomer(snapshot.selectedCustomer ?? null);
+    setTurnType(snapshot.turnType || 'walk_in');
+    setLinkedAppointmentId(snapshot.linkedAppointmentId ?? null);
+    setPendingLineStaff(snapshot.pendingLineStaff ?? null);
+    setCustomOpen(false);
+    setSvcPriceModal(false);
+    setCustomerModalOpen(false);
+    setTechModalOpen(false);
+    setDiscountOpen(false);
+    setTipOpen(false);
+    setDiscountInput('');
+    setTipInput('');
+    setAmountStr('');
+    setCustomBaseServices([]);
+    setCustomName('CUSTOM');
+  }, [openRequest]));
+
+  const saveLocalTicket = async () => {
+    if (saveBusyRef.current) return;
+    saveBusyRef.current = true;
+    setSaving(true);
+    try {
+      const state = usePosStore.getState();
+      const id = state.localTicketId || newTicketId();
+      usePosStore.setState({ localTicketId: id });
+      const snapshot = ticketSnapshot(state, { selectedCustomer, turnType, linkedAppointmentId, pendingLineStaff });
+      await useLocalTicketStore.getState().save(id, snapshot, state.getTotal());
+      Alert.alert('Save', 'Ticket đã được lưu trên thiết bị.');
+    } catch {
+      Alert.alert('Không lưu được ticket', 'Nội dung đang sửa vẫn được giữ. Vui lòng thử Save lại.');
+    } finally {
+      saveBusyRef.current = false;
+      setSaving(false);
+    }
+  };
   const testPayEnabled = useMemo(() => isPosTestPayEnabled(), []);
   const cardTerminalEnabled = isCardTerminalPaymentEnabled();
   const stripeEnabled = isStripePaymentEnabled();
@@ -379,7 +446,7 @@ export default function NewTicketScreen() {
   }, [tabs, tab]);
 
   useEffect(() => {
-    if (staffParamsAppliedRef.current) return;
+    if (useLocalTicketStore.getState().openRequest || usePosStore.getState().localTicketId || staffParamsAppliedRef.current) return;
     staffParamsAppliedRef.current = true;
     const raw = routeParamFirst(params.staffId);
     const name = routeParamFirst(params.staffName) || 'STAFF';
@@ -402,6 +469,7 @@ export default function NewTicketScreen() {
   }, [params.staffId, params.staffName, setStaff]);
 
   useEffect(() => {
+    if (useLocalTicketStore.getState().openRequest || usePosStore.getState().localTicketId) return;
     const appt = routeParamFirst(params.appointmentId);
     if (appt !== '' && /^\d+$/.test(appt)) {
       setLinkedAppointmentId(Number(appt));
@@ -495,7 +563,7 @@ export default function NewTicketScreen() {
 
   /** Test POS: một dòng vé + NV đầu từ API (id số) để Pay gửi server được ngay */
   useEffect(() => {
-    if (!testPayEnabled || posTestSeedTriedRef.current || lines.length > 0) return;
+    if (useLocalTicketStore.getState().openRequest || usePosStore.getState().localTicketId || !testPayEnabled || posTestSeedTriedRef.current || lines.length > 0) return;
     const firstSvc = services.find((s) => isApiNumericId(s.id));
     if (!firstSvc) return;
     posTestSeedTriedRef.current = true;
@@ -506,7 +574,7 @@ export default function NewTicketScreen() {
         if (!first) return;
         const mapped = mapApiEmployeeToPosStaff(first, 0);
         const st = usePosStore.getState();
-        if (st.lines.length > 0) return;
+        if (st.lines.length > 0 || st.localTicketId || useLocalTicketStore.getState().openRequest) return;
         st.setStaff(mapped.id, mapped.name);
         st.addLine({
           name: firstSvc.name,
@@ -1636,10 +1704,11 @@ export default function NewTicketScreen() {
         </View>
         <View className="w-[20%] items-end gap-1">
           <Pressable
-            onPress={() => Alert.alert('Save', 'Ticket draft saved (local).')}
+            onPress={saveLocalTicket}
+            disabled={saving}
             className="bg-primary rounded-xl py-2 px-3"
           >
-            <Text className="text-white font-bold text-xs">SAVE</Text>
+            <Text className="text-white font-bold text-xs">{saving ? 'SAVING…' : 'SAVE'}</Text>
           </Pressable>
           <Pressable
             onPress={async () => {
