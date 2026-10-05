@@ -292,20 +292,41 @@ export default function NewTicketScreen() {
     setPendingLineStaff(null);
   }, [ticketGeneration]);
   useFocusEffect(useCallback(() => {
-    if (!openRequest || appliedOpenRef.current === openRequest.nonce) return;
+    // Local requests take precedence over params retained by the mounted tab.
+    // Consume both sources so a later appointment starts a separate draft.
     const local = useLocalTicketStore.getState();
-    const ticket = openRequest.id ? local.tickets.find((t) => t.id === openRequest.id) : null;
-    if (openRequest.id && !ticket) return;
-    appliedOpenRef.current = openRequest.nonce;
+    const request = local.openRequest;
+    const appointmentId = routeParamFirst(params.appointmentId);
+    const isAppointment = /^\d+$/.test(appointmentId);
+    if (!request && !isAppointment && staffParamsAppliedRef.current) return;
+    if (request && appliedOpenRef.current === request.nonce) return;
+    const ticket = request?.id ? local.tickets.find((t) => t.id === request.id) : null;
+    if (request?.id && !ticket) return;
+    const pos = usePosStore.getState();
+    const rawStaffId = routeParamFirst(params.staffId);
+    const routeStaffId = rawStaffId === '' ? null : Number.isFinite(Number(rawStaffId)) ? Number(rawStaffId) : rawStaffId;
+    const defaultTurnType = routeParamFirst(params.defaultTurnType);
+    const defaults = request ? request.defaults : {
+      staffId: pos.staffId ?? routeStaffId,
+      staffName: pos.staffName ?? (routeParamFirst(params.staffName) || null),
+      linkedAppointmentId: isAppointment ? Number(appointmentId) : null,
+      turnType: isAppointment ? 'appointment' :
+        TURN_TYPE_OPTIONS.some((t) => t.key === defaultTurnType) ? defaultTurnType :
+          rawStaffId && rawStaffId !== routeParamFirst(params.suggestedEmployeeId) ? 'customer_pick' : 'walk_in',
+    };
+    if (request) appliedOpenRef.current = request.nonce;
     staffParamsAppliedRef.current = true;
     if (ticket) {
-      usePosStore.getState().restoreLocalTicket(ticket.id, ticket.snapshot);
+      pos.restoreLocalTicket(ticket.id, ticket.snapshot);
     } else {
-      usePosStore.getState().clearTicket();
-      usePosStore.getState().setStaff(openRequest.defaults.staffId ?? null, openRequest.defaults.staffName ?? null);
+      pos.clearTicket();
+      pos.setStaff(defaults.staffId ?? null, defaults.staffName ?? null);
     }
     observedGenerationRef.current = usePosStore.getState().ticketGeneration;
-    const snapshot = ticket ? JSON.parse(JSON.stringify(ticket.snapshot)) : openRequest.defaults;
+    const snapshot = ticket ? JSON.parse(JSON.stringify(ticket.snapshot)) : defaults;
+    // Clear consumed navigation metadata before the request subscription rerenders.
+    router.setParams({ appointmentId: '', defaultTurnType: '', staffId: '', staffName: '', suggestedEmployeeId: '' });
+    if (request) local.consumeOpen(request.nonce);
     setSelectedCustomer(snapshot.selectedCustomer ?? null);
     setTurnType(snapshot.turnType || 'walk_in');
     setLinkedAppointmentId(snapshot.linkedAppointmentId ?? null);
@@ -321,7 +342,7 @@ export default function NewTicketScreen() {
     setAmountStr('');
     setCustomBaseServices([]);
     setCustomName('CUSTOM');
-  }, [openRequest]));
+  }, [openRequest, params.appointmentId, params.defaultTurnType, params.staffId, params.staffName, params.suggestedEmployeeId]));
 
   const saveLocalTicket = async () => {
     if (saveBusyRef.current) return;
@@ -444,63 +465,6 @@ export default function NewTicketScreen() {
   useEffect(() => {
     if (!tabs.includes(tab)) setTab(tabs[0]);
   }, [tabs, tab]);
-
-  useEffect(() => {
-    if (useLocalTicketStore.getState().openRequest || usePosStore.getState().localTicketId || staffParamsAppliedRef.current) return;
-    staffParamsAppliedRef.current = true;
-    const raw = routeParamFirst(params.staffId);
-    const name = routeParamFirst(params.staffName) || 'STAFF';
-    if (raw !== '') {
-      const str = raw;
-      if (str.startsWith('local-')) {
-        setStaff(str, name);
-        return;
-      }
-      const num = Number(str);
-      setStaff(Number.isFinite(num) ? num : str, name);
-      return;
-    }
-    if (name !== '' && name !== 'STAFF') {
-      setStaff(null, name);
-      return;
-    }
-    // No params (e.g. opened via Tech Tickets button) — clear any residual staff
-    setStaff(null, null);
-  }, [params.staffId, params.staffName, setStaff]);
-
-  useEffect(() => {
-    if (useLocalTicketStore.getState().openRequest || usePosStore.getState().localTicketId) return;
-    const appt = routeParamFirst(params.appointmentId);
-    if (appt !== '' && /^\d+$/.test(appt)) {
-      setLinkedAppointmentId(Number(appt));
-      setTurnType('appointment');
-      return;
-    }
-    setLinkedAppointmentId(null);
-
-    const dt = routeParamFirst(params.defaultTurnType);
-    if (['walk_in', 'customer_pick', 'owner_assign', 'appointment'].includes(dt)) {
-      setTurnType(dt);
-      return;
-    }
-
-    const sug = routeParamFirst(params.suggestedEmployeeId);
-    const sid = routeParamFirst(params.staffId);
-    const sNum = sid !== '' ? Number(sid) : NaN;
-    const gNum = sug !== '' ? Number(sug) : NaN;
-    if (Number.isFinite(sNum) && Number.isFinite(gNum) && sNum === gNum) {
-      setTurnType('walk_in');
-    } else if (Number.isFinite(sNum)) {
-      setTurnType('customer_pick');
-    } else {
-      setTurnType('walk_in');
-    }
-  }, [
-    params.appointmentId,
-    params.defaultTurnType,
-    params.suggestedEmployeeId,
-    params.staffId,
-  ]);
 
   const loadStaffForModal = useCallback(async () => {
     const localExtras = useLocalCatalogStore.getState().employees;

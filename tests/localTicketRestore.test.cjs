@@ -41,8 +41,8 @@ test('focus request restores component state once per request, switches tickets 
   const tickets = [{ id: 'A', snapshot }, { id: 'B', snapshot: { ...snapshot, selectedCustomer: null, linkedAppointmentId: 4 } }];
   const setters = Object.fromEntries(['SelectedCustomer','TurnType','LinkedAppointmentId','PendingLineStaff','CustomOpen','SvcPriceModal','CustomerModalOpen','TechModalOpen','DiscountOpen','TipOpen','DiscountInput','TipInput','AmountStr','CustomBaseServices','CustomName'].map((key) => [`set${key}`, (v) => { values[key] = v; }]));
   const run = (openRequest) => evaluate(callback, {
-    openRequest, appliedOpenRef, staffParamsAppliedRef: { current: false }, observedGenerationRef: { current: 0 },
-    useLocalTicketStore: { getState: () => ({ tickets }) },
+    openRequest, params: {}, router: { setParams: () => {} }, routeParamFirst: (v) => v || '', TURN_TYPE_OPTIONS: [], appliedOpenRef, staffParamsAppliedRef: { current: false }, observedGenerationRef: { current: 0 },
+    useLocalTicketStore: { getState: () => ({ tickets, openRequest, consumeOpen: () => {} }) },
     usePosStore: { getState: () => ({ ...state, restoreLocalTicket: (id) => { state.id = id; restores++; },
       clearTicket: () => { state.id = null; state.ticketGeneration++; }, setStaff: (id) => { state.staffId = id; } }) },
     ...setters,
@@ -60,4 +60,51 @@ test('all changed JavaScript/JSX parses', () => {
   for (const file of ['app/(pos)/new-ticket.jsx', 'components/PublicHomeScreen.jsx', 'components/CustomerReceipts.jsx', 'store/posStore.js', 'store/localTicketStore.js', 'utils/localTickets.js']) {
     parser.parse(fs.readFileSync(path.join(root, file), 'utf8'), { sourceType: 'module', plugins: ['jsx'] });
   }
+});
+
+test('Home → Appointment and receipt A → Appointment → Save detach ID and preserve A', async () => {
+  const { createStore } = require('zustand/vanilla');
+  const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+  const utils = new Function(read('utils/localTickets.js').replaceAll('export ', '') + '; return {cloneTicket, LOCAL_TICKET_KEY, parseTickets, phoenixDay, ticketSnapshot};')();
+  const storeSource = read('store/localTicketStore.js').replace(/^import .*;\n/gm, '').replaceAll('export ', '').replace('const useLocalTicketStore = createLocalTicketStore(AsyncStorage);', '');
+  const factory = new Function('create', ...Object.keys(utils), storeSource + ';return createLocalTicketStore;')(createStore, ...Object.values(utils));
+  const local = factory({ getItem: async () => null, setItem: async () => {} });
+  const pos = new Function('create', read('store/posStore.js').replace(/^import .*;\n/gm, '').replace('export const', 'const') + ';return usePosStore;')(createStore);
+  const expression = screen.body.body.find((n) => n.type === 'ExpressionStatement' && n.expression.callee?.name === 'useFocusEffect');
+  const callback = expression.expression.arguments[0].arguments[0];
+  const values = {}; const params = {};
+  const setters = Object.fromEntries(['SelectedCustomer','TurnType','LinkedAppointmentId','PendingLineStaff','CustomOpen','SvcPriceModal','CustomerModalOpen','TechModalOpen','DiscountOpen','TipOpen','DiscountInput','TipInput','AmountStr','CustomBaseServices','CustomName'].map((key) => [`set${key}`, (v) => { values[key] = v; }]));
+  const bindings = { usePosStore: pos, useLocalTicketStore: local, params,
+    router: { setParams: (next) => Object.assign(params, next) },
+    routeParamFirst: (v) => String(v ?? ''), TURN_TYPE_OPTIONS: [{ key: 'appointment' }],
+    appliedOpenRef: { current: null }, staffParamsAppliedRef: { current: false }, observedGenerationRef: { current: 0 }, ...setters };
+  const focus = () => evaluate(callback, bindings)();
+  const ui = () => ({ selectedCustomer: values.SelectedCustomer, turnType: values.TurnType, linkedAppointmentId: values.LinkedAppointmentId, pendingLineStaff: values.PendingLineStaff });
+  local.getState().requestOpen(null, { staffId: 7 }); focus();
+  assert.equal(local.getState().openRequest, null);
+  pos.getState().setStaff(8, 'Appointment tech');
+  Object.assign(params, { appointmentId: '42', defaultTurnType: 'appointment' }); focus();
+  assert.equal(values.LinkedAppointmentId, 42); assert.equal(values.TurnType, 'appointment');
+  assert.equal(pos.getState().staffId, 8);
+  pos.getState().addLine({ name: 'A service', price: 40 });
+  await local.getState().save('A', utils.ticketSnapshot(pos.getState(), ui()), 40);
+  const original = JSON.stringify(local.getState().tickets[0]);
+  local.getState().requestOpen('A'); focus();
+  assert.equal(pos.getState().localTicketId, 'A');
+  focus(); assert.equal(pos.getState().localTicketId, 'A'); // subscription rerender / refocus
+  pos.getState().setStaff(9, 'Next tech');
+  Object.assign(params, { appointmentId: '42', defaultTurnType: 'appointment' }); focus();
+  assert.equal(pos.getState().localTicketId, null);
+  assert.deepEqual(pos.getState().lines, []);
+  assert.equal(values.SelectedCustomer, null); assert.equal(values.LinkedAppointmentId, 42);
+  pos.getState().addLine({ name: 'Appointment service', price: 25 });
+  const handler = evaluate(save, { ...bindings, saveBusyRef: { current: false }, setSaving: () => {},
+    newTicketId: () => 'appointment-draft', ticketSnapshot: utils.ticketSnapshot,
+    ...ui(), Alert: { alert: () => {} } });
+  await handler();
+  assert.equal(JSON.stringify(local.getState().tickets.find((t) => t.id === 'A')), original);
+  assert.equal(local.getState().tickets.find((t) => t.id === 'appointment-draft').snapshot.linkedAppointmentId, 42);
+  // Stale appointment params must never replace a requested receipt.
+  params.appointmentId = '99'; local.getState().requestOpen('A'); focus(); focus();
+  assert.equal(pos.getState().localTicketId, 'A'); assert.equal(values.LinkedAppointmentId, 42);
 });

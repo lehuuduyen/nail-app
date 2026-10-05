@@ -5,12 +5,14 @@ import { cloneTicket, LOCAL_TICKET_KEY, parseTickets, phoenixDay } from '../util
 // Explicit persistence: publish only after durable writes; failed reads never become an empty save.
 export function createLocalTicketStore(storage, createStore = create) {
   let hydration;
+  let requestNonce = 0;
   let queue = Promise.resolve();
   return createStore((set, get) => ({
     tickets: [], hydrated: false, error: null, openRequest: null,
-    requestOpen: (id = null, defaults = {}) => set((s) => ({
-      openRequest: { nonce: (s.openRequest?.nonce || 0) + 1, id, defaults },
-    })),
+    requestOpen: (id = null, defaults = {}) => set({
+      openRequest: { nonce: ++requestNonce, id, defaults },
+    }),
+    consumeOpen: (nonce) => set((s) => s.openRequest?.nonce === nonce ? { openRequest: null } : {}),
     hydrate: () => {
       if (get().hydrated) return Promise.resolve();
       if (!hydration) hydration = (async () => {

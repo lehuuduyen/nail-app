@@ -49,7 +49,10 @@ test('durable round trip, stable ID, isolated edits, A → B → A and clear', a
   assert.equal(pos.getState().localTicketId, null);
   assert.equal(pos.getState().lines.length, 0);
   reopened.getState().requestOpen('A'); const first = reopened.getState().openRequest.nonce;
+  reopened.getState().consumeOpen(first); assert.equal(reopened.getState().openRequest, null);
   reopened.getState().requestOpen('A'); assert.ok(reopened.getState().openRequest.nonce > first);
+  const newer = reopened.getState().openRequest;
+  reopened.getState().consumeOpen(first); assert.equal(reopened.getState().openRequest, newer);
 });
 test('slow hydration, serialized concurrent saves, failed write retry without publishing', async () => {
   const pos = sample(); const snap = utils.ticketSnapshot(pos.getState(), ui);
