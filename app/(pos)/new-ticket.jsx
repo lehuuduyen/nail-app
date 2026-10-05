@@ -12,6 +12,7 @@ import {
   ScrollView,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,6 +25,7 @@ import ReceiptModal from '../../components/ReceiptModal';
 import StripeTerminalPaymentModal from '../../components/StripeTerminalPaymentModal';
 import StripeReaderModal from '../../components/StripeReaderModal';
 import TipDistributionModal from '../../components/TipDistributionModal';
+import NumPad from '../../components/NumPad';
 import ServiceButton from '../../components/ServiceButton';
 import TicketSummary from '../../components/TicketSummary';
 import { SAMPLE_SERVICES, SAMPLE_STAFF } from '../../constants/sampleData';
@@ -71,6 +73,27 @@ const READER_RECONNECT_TIMEOUT_MS = 10_000;
 // Bật để test luồng thẻ bằng reader giả lập (sandbox) — không cần máy thật, không
 // tốn phí Stripe, không charge tiền thật. PHẢI tắt (env=0 hoặc xoá) trước khi build live.
 const STRIPE_SIMULATED_READER = process.env.EXPO_PUBLIC_STRIPE_SIMULATED_READER === '1';
+
+// SDK Stripe Terminal RN trả PI dạng camelCase (charges[0].paymentMethodDetails
+// .cardPresentDetails) — KHÁC với REST API snake_case (charges.data[0]
+// .payment_method_details.card_present). Đọc cả 2 dạng để thông tin thẻ
+// (last4, auth code, AID...) không bị rỗng trên biên lai.
+function extractCardPresentDetails(pi) {
+  const charge = pi?.charges?.[0] ?? pi?.charges?.data?.[0] ?? {};
+  const pmd = charge.paymentMethodDetails ?? charge.payment_method_details ?? {};
+  const card = pmd.cardPresentDetails ?? pmd.interacPresentDetails ?? pmd.card_present ?? {};
+  const receipt = card.receipt ?? {};
+  const rm = String(card.readMethod ?? card.read_method ?? '').toLowerCase();
+  return {
+    brand: card.brand || '',
+    last4: card.last4 || '',
+    cardholderName: card.cardholderName ?? card.cardholder_name ?? '',
+    entryMode: rm.includes('swipe') ? 'swiped' : rm.includes('contactless') || !rm ? 'contactless' : 'chip',
+    authCode: receipt.authorizationCode ?? receipt.authorization_code ?? '',
+    aidLabel: receipt.applicationPreferredName ?? receipt.application_preferred_name ?? '',
+    aid: receipt.dedicatedFileName ?? receipt.dedicated_file_name ?? '',
+  };
+}
 
 // Reader có thể yêu cầu khách thao tác thêm NGAY TRONG LÚC processPaymentIntent
 // đang chạy (vd. chạm lại lần 2 để xác thực số tiền lớn) — báo qua
@@ -164,6 +187,7 @@ function routeParamFirst(v) {
 }
 
 export default function NewTicketScreen() {
+  const { width: screenWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams();
   const setStaff = usePosStore((s) => s.setStaff);
@@ -241,6 +265,10 @@ export default function NewTicketScreen() {
   const pendingPayloadsRef = useRef(null);
   const pendingStripeMetaRef = useRef(null);
   const pendingTipDistribRef = useRef(null); // null hoặc { totalTip, techGroups }
+  // Modal đổi giá khi chọn dịch vụ
+  const [svcPriceModal, setSvcPriceModal] = useState(false);
+  const [editingSvc, setEditingSvc] = useState(null); // { name, price, priceCard, qty, serviceId }
+  const [editingPriceStr, setEditingPriceStr] = useState('');
   /** Tab navigator giữ màn hình đã mount — `router.push` lần 2 trở đi tới cùng route
    * không cập nhật lại `params` (React Navigation chỉ JUMP_TO màn cũ với params cũ),
    * nên chỉ áp dụng params nhân viên LẦN ĐẦU; các lần chọn nhân viên sau đó các màn
@@ -975,8 +1003,7 @@ export default function NewTicketScreen() {
     try {
       const store = usePosStore.getState();
       store.setTip(tipAmount);
-      const card = charged.confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present || {};
-      const receiptDetails = charged.confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present?.receipt || {};
+      const card = extractCardPresentDetails(charged.confirmedPI);
       console.log('[PAY][SPLIT][3] card brand=', card.brand, 'last4=', card.last4);
 
       console.log('[PAY][SPLIT][3] building payloads and persisting...');
@@ -1013,12 +1040,13 @@ export default function NewTicketScreen() {
           signaturePaths: signaturePaths ?? [],
           cashPortion,
           cardPortion,
-          cardBrand: card.brand || '',
-          cardLast4: card.last4 || '',
-          entryMode: card.entry_mode || 'contactless',
-          authCode: receiptDetails.authorization_code || '',
-          aidLabel: receiptDetails.application_preferred_name || '',
-          aid: receiptDetails.dedicated_file_name || '',
+          cardBrand: card.brand,
+          cardLast4: card.last4,
+          cardholderName: card.cardholderName,
+          entryMode: card.entryMode,
+          authCode: card.authCode,
+          aidLabel: card.aidLabel,
+          aid: card.aid,
         };
         setCardCheckoutOpen(false);
         finishCheckoutAndLeave();
@@ -1326,8 +1354,7 @@ export default function NewTicketScreen() {
       const store = usePosStore.getState();
       store.setTip(tipToDisplay);
       // card info đọc từ PI được trả về lúc authorize (processPaymentIntent) — xem charged.confirmedPI
-      const card = charged.confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present || {};
-      const receiptDetails = charged.confirmedPI?.charges?.data?.[0]?.payment_method_details?.card_present?.receipt || {};
+      const card = extractCardPresentDetails(charged.confirmedPI);
       console.log('[PAY][5] card brand=', card.brand, 'last4=', card.last4);
 
       cardReceiptRef.current = {
@@ -1340,12 +1367,13 @@ export default function NewTicketScreen() {
         staffName: displayStaffName || '',
         date: format(new Date(), 'dd/MM/yyyy HH:mm'),
         signaturePaths: signaturePaths ?? [],
-        cardBrand: card.brand || '',
-        cardLast4: card.last4 || '',
-        entryMode: card.entry_mode || 'contactless',
-        authCode: receiptDetails.authorization_code || '',
-        aidLabel: receiptDetails.application_preferred_name || '',
-        aid: receiptDetails.dedicated_file_name || '',
+        cardBrand: card.brand,
+        cardLast4: card.last4,
+        cardholderName: card.cardholderName,
+        entryMode: card.entryMode,
+        authCode: card.authCode,
+        aidLabel: card.aidLabel,
+        aid: card.aid,
       };
 
       // Build payloads với default tip split (theo tỉ lệ service) — có thể điều chỉnh sau
@@ -1794,14 +1822,17 @@ export default function NewTicketScreen() {
                   price={s.price}
                   priceCard={s.priceCard}
                   duration={s.duration}
-                  onPress={() =>
-                    appendLineWithTech({
+                  onPress={() => {
+                    setEditingSvc({
                       name: s.name,
                       price: s.price,
+                      priceCard: s.priceCard,
                       qty: 1,
                       serviceId: s.id ?? fallbackServiceId,
-                    })
-                  }
+                    });
+                    setEditingPriceStr(String(s.price));
+                    setSvcPriceModal(true);
+                  }}
                 />
               ))}
             </View>
@@ -2124,15 +2155,9 @@ export default function NewTicketScreen() {
           className="flex-1 bg-black/40 justify-center px-8"
           onPress={() => setDiscountOpen(false)}
         >
-          <Pressable className="bg-white rounded-xl p-4" onPress={(e) => e.stopPropagation()}>
-            <Text className="font-bold mb-2">Discount amount</Text>
-            <TextInput
-              keyboardType="decimal-pad"
-              value={discountInput}
-              onChangeText={setDiscountInput}
-              className="border border-neutral-300 rounded-lg px-3 py-2 mb-3"
-              placeholder="0.00"
-            />
+          <Pressable className="bg-white rounded-xl p-5" onPress={(e) => e.stopPropagation()}>
+            <Text className="font-bold text-base mb-3">Discount amount</Text>
+            <NumPad value={discountInput} onChange={setDiscountInput} label="Nhập số tiền giảm" style={{ marginBottom: 14 }} />
             <Pressable
               onPress={() => {
                 setDiscount(parseFloat(discountInput) || 0);
@@ -2152,18 +2177,12 @@ export default function NewTicketScreen() {
           className="flex-1 bg-black/40 justify-center px-8"
           onPress={() => setTipOpen(false)}
         >
-          <Pressable className="bg-white rounded-xl p-4" onPress={(e) => e.stopPropagation()}>
-            <Text className="font-bold mb-2">Tip amount</Text>
-            <Text className="text-[11px] text-neutral-500 mb-2 leading-snug">
+          <Pressable className="bg-white rounded-xl p-5" onPress={(e) => e.stopPropagation()}>
+            <Text className="font-bold text-base mb-1">Tip amount</Text>
+            <Text className="text-[11px] text-neutral-500 mb-3 leading-snug">
               Phí thẻ 3% không áp dụng lên tip — chỉ trên (Subtotal + Tax − Discount).
             </Text>
-            <TextInput
-              keyboardType="decimal-pad"
-              value={tipInput}
-              onChangeText={setTipInput}
-              className="border border-neutral-300 rounded-lg px-3 py-2 mb-3"
-              placeholder="0.00"
-            />
+            <NumPad value={tipInput} onChange={setTipInput} label="Nhập tip" accentColor="#FF9800" style={{ marginBottom: 14 }} />
             <Pressable
               onPress={() => {
                 setTip(parseFloat(tipInput) || 0);
@@ -2354,6 +2373,71 @@ export default function NewTicketScreen() {
                 <Text style={{ fontSize: 14, color: '#f43f5e' }}>Bỏ chọn khách hiện tại</Text>
               </Pressable>
             )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── Modal đổi giá dịch vụ ── */}
+      <Modal
+        visible={svcPriceModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSvcPriceModal(false)}
+      >
+        <Pressable
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
+          onPress={() => setSvcPriceModal(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '100%', maxWidth: 360 }}
+          >
+            {/* Tên dịch vụ */}
+            <Text style={{ fontSize: 17, fontWeight: '700', color: '#1a1a2e', marginBottom: 4 }} numberOfLines={2}>
+              {editingSvc?.name}
+            </Text>
+            {editingSvc?.priceCard != null && (
+              <Text style={{ fontSize: 12, color: '#888', marginBottom: 12 }}>
+                Giá thẻ: ${Number(editingSvc.priceCard).toFixed(2)}
+              </Text>
+            )}
+
+            <NumPad
+              value={editingPriceStr}
+              onChange={setEditingPriceStr}
+              label="Giá dịch vụ (có thể chỉnh)"
+              accentColor="#0066CC"
+              style={{ marginBottom: 20, width: Math.min(screenWidth - 48, 360) - 40 }}
+            />
+
+            {/* Nút hành động */}
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <Pressable
+                onPress={() => setSvcPriceModal(false)}
+                style={{ flex: 1, paddingVertical: 13, borderRadius: 10, borderWidth: 1, borderColor: '#ddd', alignItems: 'center' }}
+              >
+                <Text style={{ fontSize: 15, color: '#666', fontWeight: '600' }}>Hủy</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  const parsed = parseFloat(editingPriceStr.replace(',', '.'));
+                  if (!Number.isFinite(parsed) || parsed < 0) {
+                    Alert.alert('Giá không hợp lệ', 'Vui lòng nhập số tiền hợp lệ.');
+                    return;
+                  }
+                  setSvcPriceModal(false);
+                  appendLineWithTech({
+                    name: editingSvc.name,
+                    price: parsed,
+                    qty: 1,
+                    serviceId: editingSvc.serviceId,
+                  });
+                }}
+                style={{ flex: 1, paddingVertical: 13, borderRadius: 10, backgroundColor: '#0066CC', alignItems: 'center' }}
+              >
+                <Text style={{ fontSize: 15, color: '#fff', fontWeight: '700' }}>Thêm vào vé</Text>
+              </Pressable>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
