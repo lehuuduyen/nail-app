@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, View } from 'react-native';
+import { Alert, AppState, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../api/client';
 import { fetchCatalogEmployees, fetchSalonDisplayName } from '../api/catalog';
@@ -26,11 +26,34 @@ import {
 import { mapApiEmployeeToPosStaff } from '../utils/staffDisplay';
 import { transactionsToReceiptRows } from '../utils/receiptsFromTransactions';
 
+import { useLocalTicketStore } from '../store/localTicketStore';
+import { phoenixDay, nextPhoenixMidnight, ticketStaffNames } from '../utils/localTickets';
+
 const PAGE_BG = '#f0f0f0';
 const RIGHT_COL_W = 280;
 
 export default function PublicHomeScreen() {
   const insets = useSafeAreaInsets();
+  const localTickets = useLocalTicketStore((s) => s.tickets);
+  const storageError = useLocalTicketStore((s) => s.error);
+  const [localDay, setLocalDay] = useState(() => phoenixDay());
+  const refreshLocalTickets = useCallback(() => {
+    setLocalDay(phoenixDay());
+    useLocalTicketStore.getState().hydrate().catch(() => {});
+  }, []);
+  useFocusEffect(useCallback(() => { refreshLocalTickets(); }, [refreshLocalTickets]));
+  useEffect(() => {
+    let timer;
+    const schedule = () => {
+      clearTimeout(timer);
+      refreshLocalTickets();
+      timer = setTimeout(schedule, nextPhoenixMidnight() + 50);
+    };
+    schedule();
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') schedule(); });
+    return () => { clearTimeout(timer); sub.remove(); };
+  }, [refreshLocalTickets]);
+
   const logout = useAuthStore((s) => s.logout);
   const ownerLogout = useOwnerStore((s) => s.logout);
   const clearAdminSession = useAuthStore((s) => s.clearAdminSession);
@@ -154,6 +177,32 @@ export default function PublicHomeScreen() {
     [transactions, salonYmd]
   );
 
+  const mergedUnpaidReceipts = useMemo(() => [
+    ...localTickets.filter((t) => t.day === localDay).map((t) => ({
+      id: t.id, key: `local:${t.id}`, local: true,
+      serviceBy: ticketStaffNames(t.snapshot), total: t.total.toFixed(2),
+    })),
+    ...unpaidReceipts.map((r) => {
+      // Preserve API amounts; recover technician identity before its display mapper drops IDs.
+      const representative = transactions.find((tx) => String(tx.id) === String(r.id));
+      const group = representative?.ticketId
+        ? transactions.filter((tx) => tx.ticketId === representative.ticketId &&
+            ['pending', 'open', 'unpaid', 'draft'].includes(String(tx.paymentStatus).toLowerCase()))
+        : representative ? [representative] : [];
+      const names = new Map();
+      group.forEach((tx) => {
+        const e = tx.Employee;
+        if (e) names.set(String(tx.employeeId ?? e.id), mapApiEmployeeToPosStaff(e, 0).displayName);
+      });
+      return { ...r, key: `api:${r.id}`, serviceBy: [...names.values()].filter(Boolean).join(' + ') ||
+        (r.serviceBy || '').replace(/^Service By:\s*/, '').split('+').map((n) => n.trim()).filter(Boolean).join(' + ') };
+    }),
+  ], [localTickets, localDay, unpaidReceipts, transactions]);
+  const openLocalReceipt = (receipt) => {
+    useLocalTicketStore.getState().requestOpen(receipt.id);
+    router.push('/(pos)/new-ticket');
+  };
+
   const receiptsDaySubtext = `Hôm nay (${getSalonTzDisplayLabel()}) · ${formatSalonTodayReadable()}`;
 
   const onSelectStaff = (s) => {
@@ -164,6 +213,9 @@ export default function PublicHomeScreen() {
     // Tab navigator giữ màn new-ticket đã mount — push lần 2 trở đi không cập nhật
     // lại params (chỉ JUMP_TO màn cũ), nên phải set thẳng vào store để màn luôn
     // nhận đúng nhân viên vừa chọn (không bị kẹt ở người đầu tiên trong phiên).
+    useLocalTicketStore.getState().requestOpen(null, {
+      staffId: s.id, staffName: displayName, turnType: defaultTurnType,
+    });
     usePosStore.getState().setStaff(s.id, displayName);
     router.push({
       pathname: '/(pos)/new-ticket',
@@ -228,7 +280,10 @@ export default function PublicHomeScreen() {
           />
           <CustomerReceipts
             paidReceipts={paidReceipts}
-            unpaidReceipts={unpaidReceipts}
+            unpaidReceipts={mergedUnpaidReceipts}
+            onOpenLocalReceipt={openLocalReceipt}
+            storageError={storageError}
+            onRetryStorage={refreshLocalTickets}
             daySubtext={receiptsDaySubtext}
           />
         </View>
@@ -236,6 +291,7 @@ export default function PublicHomeScreen() {
         <RightActionButtons
           onTechTickets={() => {
             // Mở vé trống — không gán sẵn nhân viên (chọn "Add Tech" theo từng dòng).
+            useLocalTicketStore.getState().requestOpen();
             usePosStore.getState().setStaff(null, null);
             router.push('/(pos)/new-ticket');
           }}

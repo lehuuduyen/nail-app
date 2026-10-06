@@ -7,6 +7,14 @@ export const usePosStore = create((set, get) => ({
   homeRefreshNonce: 0,
   bumpHomeRefresh: () => set((s) => ({ homeRefreshNonce: s.homeRefreshNonce + 1 })),
 
+  localTicketId: null,
+  ticketGeneration: 0,
+  restoreLocalTicket: (id, snapshot) => set({
+    ...JSON.parse(JSON.stringify(Object.fromEntries(
+      ['lines', 'staffId', 'staffName', 'taxEnabled', 'taxRate', 'tip', 'discount', 'customLabel']
+        .map((key) => [key, snapshot[key]])
+    ))), localTicketId: id,
+  }),
   staffId: null,
   staffName: null,
   lines: [],
@@ -15,14 +23,29 @@ export const usePosStore = create((set, get) => ({
   tip: 0,
   discount: 0,
   customLabel: '',
-  setStaff: (staffId, staffName) => set({ staffId, staffName }),
+  // Legacy navigation callers (including both Appointments POS buttons) call
+  // setStaff before opening the mounted tab. Preserve that intent even for the
+  // same technician or null staff; staff equality is not a new-ticket signal.
+  staffRequestNonce: 0,
+  pendingStaffRequest: null,
+  setStaff: (staffId, staffName, startNewTicket = true) => set((s) => ({
+    staffId, staffName,
+    ...(startNewTicket ? {
+      staffRequestNonce: s.staffRequestNonce + 1,
+      pendingStaffRequest: { nonce: s.staffRequestNonce + 1, staffId, staffName },
+    } : {}),
+  })),
+  consumeStaffRequest: (nonce) => set((s) =>
+    s.pendingStaffRequest?.nonce === nonce ? { pendingStaffRequest: null } : {}),
   addLine: (line) =>
     set((s) => ({
       lines: [...s.lines, { ...line, id: `${Date.now()}-${Math.random()}` }],
     })),
   removeLine: (id) => set((s) => ({ lines: s.lines.filter((l) => l.id !== id) })),
   clearTicket: () =>
-    set({
+    set((s) => ({
+      localTicketId: null,
+      ticketGeneration: s.ticketGeneration + 1,
       lines: [],
       tip: 0,
       discount: 0,
@@ -30,7 +53,7 @@ export const usePosStore = create((set, get) => ({
       customLabel: '',
       staffId: null,
       staffName: null,
-    }),
+    })),
   setTaxEnabled: (v) => set({ taxEnabled: v }),
   setTip: (v) => set({ tip: Number(v) || 0 }),
   setDiscount: (v) => set({ discount: Number(v) || 0 }),

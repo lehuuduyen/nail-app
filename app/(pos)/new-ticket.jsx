@@ -32,6 +32,9 @@ import { SAMPLE_SERVICES, SAMPLE_STAFF } from '../../constants/sampleData';
 import { useLocalCatalogStore } from '../../store/localCatalogStore';
 import { usePosStore } from '../../store/posStore';
 
+import { useLocalTicketStore } from '../../store/localTicketStore';
+import { newTicketId, ticketSnapshot } from '../../utils/localTickets';
+
 const TURN_TYPE_OPTIONS = [
   { key: 'walk_in', label: 'Walk-in', color: '#4CAF50' },
   { key: 'customer_pick', label: 'Khách chọn', color: '#2196F3' },
@@ -211,7 +214,7 @@ export default function NewTicketScreen() {
   // setStaff() thẳng vào store TRƯỚC khi push nên luôn mới nhất; còn `params`
   // có thể bị "đứng hình" ở giá trị nhân viên ĐẦU TIÊN từng chọn trong phiên vì
   // Tab navigator chỉ JUMP_TO màn new-ticket đã mount thay vì cập nhật lại params.
-  const displayStaffName = staffName || routeParamFirst(params.staffName) || null;
+  const displayStaffName = staffName || null;
 
   const [tab, setTab] = useState(POS_TAB_ORDER[0]);
   const [serviceSearch, setServiceSearch] = useState('');
@@ -274,6 +277,95 @@ export default function NewTicketScreen() {
    * nên chỉ áp dụng params nhân viên LẦN ĐẦU; các lần chọn nhân viên sau đó các màn
    * điều hướng (PublicHomeScreen, appointments...) phải gọi thẳng `setStaff` trước khi push. */
   const staffParamsAppliedRef = useRef(false);
+  const openRequest = useLocalTicketStore((s) => s.openRequest);
+  const appliedOpenRef = useRef(null);
+  const saveBusyRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const ticketGeneration = usePosStore((s) => s.ticketGeneration);
+  const observedGenerationRef = useRef(ticketGeneration);
+  useEffect(() => {
+    if (observedGenerationRef.current === ticketGeneration) return;
+    observedGenerationRef.current = ticketGeneration;
+    setSelectedCustomer(null);
+    setTurnType('walk_in');
+    setLinkedAppointmentId(null);
+    setPendingLineStaff(null);
+  }, [ticketGeneration]);
+  useFocusEffect(useCallback(() => {
+    // Local requests take precedence over params retained by the mounted tab.
+    // Consume both sources so a later appointment starts a separate draft.
+    const local = useLocalTicketStore.getState();
+    const request = local.openRequest;
+    const pos = usePosStore.getState();
+    const staffRequest = pos.pendingStaffRequest;
+    const appointmentId = routeParamFirst(params.appointmentId);
+    const isAppointment = /^\d+$/.test(appointmentId);
+    if (!request && !staffRequest && !isAppointment && staffParamsAppliedRef.current) return;
+    if (request && appliedOpenRef.current === request.nonce) return;
+    const ticket = request?.id ? local.tickets.find((t) => t.id === request.id) : null;
+    if (request?.id && !ticket) return;
+    const rawStaffId = routeParamFirst(params.staffId);
+    const routeStaffId = rawStaffId === '' ? null : Number.isFinite(Number(rawStaffId)) ? Number(rawStaffId) : rawStaffId;
+    const defaultTurnType = routeParamFirst(params.defaultTurnType);
+    const defaults = request ? request.defaults : {
+      staffId: staffRequest ? staffRequest.staffId : pos.staffId ?? routeStaffId,
+      staffName: staffRequest ? staffRequest.staffName : pos.staffName ?? (routeParamFirst(params.staffName) || null),
+      linkedAppointmentId: isAppointment ? Number(appointmentId) : null,
+      turnType: isAppointment ? 'appointment' :
+        TURN_TYPE_OPTIONS.some((t) => t.key === defaultTurnType) ? defaultTurnType :
+          rawStaffId && rawStaffId !== routeParamFirst(params.suggestedEmployeeId) ? 'customer_pick' : 'walk_in',
+    };
+    if (request) appliedOpenRef.current = request.nonce;
+    staffParamsAppliedRef.current = true;
+    if (ticket) {
+      pos.restoreLocalTicket(ticket.id, ticket.snapshot);
+    } else {
+      pos.clearTicket();
+      pos.setStaff(defaults.staffId ?? null, defaults.staffName ?? null, false);
+    }
+    observedGenerationRef.current = usePosStore.getState().ticketGeneration;
+    const snapshot = ticket ? JSON.parse(JSON.stringify(ticket.snapshot)) : defaults;
+    // Clear consumed navigation metadata before the request subscription rerenders.
+    router.setParams({ appointmentId: '', defaultTurnType: '', staffId: '', staffName: '', suggestedEmployeeId: '' });
+    if (staffRequest) pos.consumeStaffRequest(staffRequest.nonce);
+    if (request) local.consumeOpen(request.nonce);
+    setSelectedCustomer(snapshot.selectedCustomer ?? null);
+    setTurnType(snapshot.turnType || 'walk_in');
+    setLinkedAppointmentId(snapshot.linkedAppointmentId ?? null);
+    setPendingLineStaff(snapshot.pendingLineStaff ?? null);
+    setCustomOpen(false);
+    setSvcPriceModal(false);
+    setCustomerModalOpen(false);
+    setTechModalOpen(false);
+    setDiscountOpen(false);
+    setTipOpen(false);
+    setDiscountInput('');
+    setTipInput('');
+    setAmountStr('');
+    setCustomBaseServices([]);
+    setCustomName('CUSTOM');
+  }, [openRequest, params.appointmentId, params.defaultTurnType, params.staffId, params.staffName, params.suggestedEmployeeId]));
+
+  const saveLocalTicket = async () => {
+    if (saveBusyRef.current) return;
+    saveBusyRef.current = true;
+    setSaving(true);
+    try {
+      const state = usePosStore.getState();
+      const id = state.localTicketId || newTicketId();
+      usePosStore.setState({ localTicketId: id });
+      const snapshot = ticketSnapshot(state, { selectedCustomer, turnType, linkedAppointmentId, pendingLineStaff });
+      await useLocalTicketStore.getState().save(id, snapshot, state.getTotal());
+      resetLocalTicketUi();
+      router.replace('/(pos)');
+    } catch {
+      Alert.alert('Không lưu được ticket', 'Nội dung đang sửa vẫn được giữ. Vui lòng thử Save lại.');
+    } finally {
+      saveBusyRef.current = false;
+      setSaving(false);
+    }
+  };
   const testPayEnabled = useMemo(() => isPosTestPayEnabled(), []);
   const cardTerminalEnabled = isCardTerminalPaymentEnabled();
   const stripeEnabled = isStripePaymentEnabled();
@@ -378,62 +470,6 @@ export default function NewTicketScreen() {
     if (!tabs.includes(tab)) setTab(tabs[0]);
   }, [tabs, tab]);
 
-  useEffect(() => {
-    if (staffParamsAppliedRef.current) return;
-    staffParamsAppliedRef.current = true;
-    const raw = routeParamFirst(params.staffId);
-    const name = routeParamFirst(params.staffName) || 'STAFF';
-    if (raw !== '') {
-      const str = raw;
-      if (str.startsWith('local-')) {
-        setStaff(str, name);
-        return;
-      }
-      const num = Number(str);
-      setStaff(Number.isFinite(num) ? num : str, name);
-      return;
-    }
-    if (name !== '' && name !== 'STAFF') {
-      setStaff(null, name);
-      return;
-    }
-    // No params (e.g. opened via Tech Tickets button) — clear any residual staff
-    setStaff(null, null);
-  }, [params.staffId, params.staffName, setStaff]);
-
-  useEffect(() => {
-    const appt = routeParamFirst(params.appointmentId);
-    if (appt !== '' && /^\d+$/.test(appt)) {
-      setLinkedAppointmentId(Number(appt));
-      setTurnType('appointment');
-      return;
-    }
-    setLinkedAppointmentId(null);
-
-    const dt = routeParamFirst(params.defaultTurnType);
-    if (['walk_in', 'customer_pick', 'owner_assign', 'appointment'].includes(dt)) {
-      setTurnType(dt);
-      return;
-    }
-
-    const sug = routeParamFirst(params.suggestedEmployeeId);
-    const sid = routeParamFirst(params.staffId);
-    const sNum = sid !== '' ? Number(sid) : NaN;
-    const gNum = sug !== '' ? Number(sug) : NaN;
-    if (Number.isFinite(sNum) && Number.isFinite(gNum) && sNum === gNum) {
-      setTurnType('walk_in');
-    } else if (Number.isFinite(sNum)) {
-      setTurnType('customer_pick');
-    } else {
-      setTurnType('walk_in');
-    }
-  }, [
-    params.appointmentId,
-    params.defaultTurnType,
-    params.suggestedEmployeeId,
-    params.staffId,
-  ]);
-
   const loadStaffForModal = useCallback(async () => {
     const localExtras = useLocalCatalogStore.getState().employees;
     const mapLocal = (emps, startIdx) =>
@@ -495,7 +531,7 @@ export default function NewTicketScreen() {
 
   /** Test POS: một dòng vé + NV đầu từ API (id số) để Pay gửi server được ngay */
   useEffect(() => {
-    if (!testPayEnabled || posTestSeedTriedRef.current || lines.length > 0) return;
+    if (useLocalTicketStore.getState().openRequest || usePosStore.getState().localTicketId || !testPayEnabled || posTestSeedTriedRef.current || lines.length > 0) return;
     const firstSvc = services.find((s) => isApiNumericId(s.id));
     if (!firstSvc) return;
     posTestSeedTriedRef.current = true;
@@ -506,8 +542,8 @@ export default function NewTicketScreen() {
         if (!first) return;
         const mapped = mapApiEmployeeToPosStaff(first, 0);
         const st = usePosStore.getState();
-        if (st.lines.length > 0) return;
-        st.setStaff(mapped.id, mapped.name);
+        if (st.lines.length > 0 || st.localTicketId || useLocalTicketStore.getState().openRequest) return;
+        st.setStaff(mapped.id, mapped.name, false);
         st.addLine({
           name: firstSvc.name,
           price: firstSvc.price,
@@ -566,9 +602,21 @@ export default function NewTicketScreen() {
     setSelectedCustomer(null);
   };
 
-  const exitClear = () => {
-    resetLocalTicketUi();
-    router.back();
+  const exitClear = async () => {
+    if (saveBusyRef.current) return;
+    saveBusyRef.current = true;
+    setCancelling(true);
+    try {
+      const id = usePosStore.getState().localTicketId;
+      if (id) await useLocalTicketStore.getState().remove(id);
+      resetLocalTicketUi();
+      router.replace('/(pos)');
+    } catch {
+      Alert.alert('Không huỷ được ticket', 'Chưa xoá được ticket trên thiết bị. Nội dung đang sửa vẫn được giữ. Vui lòng thử Cancel lại.');
+    } finally {
+      saveBusyRef.current = false;
+      setCancelling(false);
+    }
   };
 
   const openCustomerModal = useCallback(async () => {
@@ -1621,9 +1669,10 @@ export default function NewTicketScreen() {
           <Text className="text-[10px] text-neutral-500">{now}</Text>
           <Pressable
             onPress={exitClear}
+            disabled={saving || cancelling}
             className="bg-primary rounded-xl py-2 px-3 mt-1 self-start"
           >
-            <Text className="text-white font-bold text-xs">CANCEL</Text>
+            <Text className="text-white font-bold text-xs">{cancelling ? 'CANCELLING…' : 'CANCEL'}</Text>
           </Pressable>
         </View>
         <View className="flex-1 items-center justify-center px-1">
@@ -1636,10 +1685,11 @@ export default function NewTicketScreen() {
         </View>
         <View className="w-[20%] items-end gap-1">
           <Pressable
-            onPress={() => Alert.alert('Save', 'Ticket draft saved (local).')}
+            onPress={saveLocalTicket}
+            disabled={saving || cancelling}
             className="bg-primary rounded-xl py-2 px-3"
           >
-            <Text className="text-white font-bold text-xs">SAVE</Text>
+            <Text className="text-white font-bold text-xs">{saving ? 'SAVING…' : 'SAVE'}</Text>
           </Pressable>
           <Pressable
             onPress={async () => {
