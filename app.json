@@ -47,6 +47,22 @@
       "expo-router",
       "expo-sharing",
       [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Location access is required to connect to Bluetooth card readers.",
+          "locationAlwaysAndWhenInUsePermission": "Location access is required to connect to Bluetooth card readers.",
+          "locationAlwaysPermission": "Location access is required to connect to Bluetooth card readers."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow access to select staff profile photos.",
+          "cameraPermission": "Allow camera access to take staff profile photos.",
+          "microphonePermission": "Allow microphone access when recording video with the camera."
+        }
+      ],
+      [
         "expo-notifications",
         {
           "icon": "./assets/icon.png",
@@ -63,7 +79,7 @@
       [
         "@stripe/stripe-terminal-react-native",
         {
-          "bluetoothBackgroundMode": true,
+          "bluetoothBackgroundMode": false,
           "locationWhenInUsePermission": "Location access is required to connect to card readers.",
           "bluetoothPeripheralPermission": "Bluetooth access is required to connect to card readers.",
           "bluetoothAlwaysUsagePermission": "Bluetooth access is required to connect to card readers.",

@@ -6,9 +6,9 @@ import {
   Pressable,
   SafeAreaView,
   Text,
-  TextInput,
   View,
 } from 'react-native';
+import NumPad from './NumPad';
 import Svg, { Line, Path } from 'react-native-svg';
 import { formatMoney } from '../utils/money';
 
@@ -58,9 +58,9 @@ function normalizePaths(paths, padding = 8) {
 }
 
 const TITLES = {
-  tip: 'Chọn Tip',
-  processing: 'Đang xử lý',
-  signature: 'Ký tên',
+  tip: 'Add a Tip',
+  processing: 'Processing',
+  signature: 'Signature',
 };
 
 /**
@@ -182,7 +182,7 @@ export default function CardCheckoutModal({
                 backgroundColor: '#f8fafc', borderRadius: 16,
                 paddingVertical: 16, paddingHorizontal: 20, marginBottom: 24,
               }}>
-                <Text style={{ fontSize: 15, color: '#6b7280', fontWeight: '600' }}>Subtotal dịch vụ</Text>
+                <Text style={{ fontSize: 15, color: '#6b7280', fontWeight: '600' }}>Service Subtotal</Text>
                 <Text style={{ fontSize: 28, fontWeight: '900', color: '#111827' }}>{formatMoney(subtotal)}</Text>
               </View>
 
@@ -218,21 +218,28 @@ export default function CardCheckoutModal({
               <Pressable
                 onPress={() => setUseCustom(true)}
                 style={{
-                  flexDirection: 'row', alignItems: 'center', gap: 14,
-                  paddingVertical: 16, paddingHorizontal: 20, borderRadius: 16, marginBottom: 20,
-                  backgroundColor: useCustom ? '#fdf4ff' : '#f9fafb',
+                  borderRadius: 16, marginBottom: 12,
                   borderWidth: 2, borderColor: useCustom ? '#a855f7' : '#e5e7eb',
+                  overflow: 'hidden',
                 }}
               >
-                <Text style={{ fontSize: 15, fontWeight: '600', color: '#374151', width: 90 }}>Số khác ($)</Text>
-                <TextInput
-                  keyboardType="decimal-pad"
-                  value={customTip}
-                  onChangeText={(v) => { setCustomTip(v); setUseCustom(true); }}
-                  placeholder="0.00"
-                  placeholderTextColor="#d1d5db"
-                  style={{ flex: 1, fontSize: 26, fontWeight: '800', color: '#111827', paddingVertical: 0 }}
-                />
+                {!useCustom ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 20, backgroundColor: '#f9fafb' }}>
+                    <Text style={{ fontSize: 15, fontWeight: '600', color: '#374151', flex: 1 }}>Custom amount…</Text>
+                    <Text style={{ fontSize: 18, color: '#9ca3af' }}>Tap to enter</Text>
+                  </View>
+                ) : (
+                  <View style={{ padding: 12 }}>
+                    <NumPad
+                      value={customTip}
+                      onChange={(v) => { setCustomTip(v); setUseCustom(true); }}
+                      label="Custom tip"
+                      accentColor="#a855f7"
+                      btnColor="#f3e8ff"
+                      delColor="#fce7f3"
+                    />
+                  </View>
+                )}
               </Pressable>
 
               {/* Total preview — đây CHÍNH XÁC là số tiền sẽ chạm thẻ */}
@@ -241,7 +248,7 @@ export default function CardCheckoutModal({
                 paddingVertical: 14, paddingHorizontal: 20,
                 backgroundColor: '#fdf4ff', borderRadius: 16, marginBottom: 20,
               }}>
-                <Text style={{ fontSize: 15, fontWeight: '600', color: '#7c3aed' }}>Tổng tiền sẽ chạm thẻ</Text>
+                <Text style={{ fontSize: 15, fontWeight: '600', color: '#7c3aed' }}>Total to Charge</Text>
                 <Text style={{ fontSize: 28, fontWeight: '900', color: '#7c3aed' }}>
                   {formatMoney(subtotal + (tipSelected ? tipAmount : 0))}
                 </Text>
@@ -257,7 +264,7 @@ export default function CardCheckoutModal({
                 }}
               >
                 <Text style={{ color: '#fff', fontWeight: '900', fontSize: 18 }}>
-                  XÁC NHẬN TIP → CHẠM THẺ
+                  CONFIRM TIP → TAP CARD
                 </Text>
               </Pressable>
             </>
@@ -265,7 +272,7 @@ export default function CardCheckoutModal({
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', gap: 18 }}>
               <ActivityIndicator size="large" color="#7c3aed" />
               <Text style={{ fontSize: 18, fontWeight: '800', color: '#111827', textAlign: 'center' }}>
-                Đang xử lý thanh toán…
+                Processing payment…
               </Text>
               {processingHint ? (
                 <View style={{
@@ -278,7 +285,7 @@ export default function CardCheckoutModal({
                 </View>
               ) : (
                 <Text style={{ fontSize: 13, color: '#6b7280', textAlign: 'center' }}>
-                  Vui lòng không tắt màn hình
+                  Please keep the screen on
                 </Text>
               )}
             </View>
@@ -291,7 +298,7 @@ export default function CardCheckoutModal({
                 borderBottomWidth: 1.5, borderBottomColor: '#f3f4f6',
               }}>
                 <Text style={{ fontSize: 14, color: '#6b7280' }}>
-                  Dịch vụ {formatMoney(subtotal)} + Tip {formatMoney(lockedTipAmount)}
+                  Service {formatMoney(subtotal)} + Tip {formatMoney(lockedTipAmount)}
                 </Text>
                 <Text style={{ fontSize: 20, fontWeight: '900', color: '#7c3aed' }}>
                   = {formatMoney(subtotal + lockedTipAmount)}
@@ -299,7 +306,7 @@ export default function CardCheckoutModal({
               </View>
 
               <Text style={{ fontSize: 14, color: '#6b7280', marginBottom: 10 }}>
-                Thẻ đã được charge thành công — vui lòng ký tên xác nhận
+                Payment approved — please sign below to confirm
               </Text>
 
               {/* Signature pad — takes remaining vertical space */}
@@ -333,7 +340,7 @@ export default function CardCheckoutModal({
                     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                     justifyContent: 'center', alignItems: 'center',
                   }}>
-                    <Text style={{ color: '#d1d5db', fontSize: 18 }}>Ký tên tại đây</Text>
+                    <Text style={{ color: '#d1d5db', fontSize: 18 }}>Sign here</Text>
                   </View>
                 )}
               </View>
@@ -344,8 +351,19 @@ export default function CardCheckoutModal({
                   onPress={() => { setPaths([]); setDrawingPath(''); currentPathRef.current = ''; }}
                   hitSlop={12}
                 >
-                  <Text style={{ color: '#ef4444', fontWeight: '700', fontSize: 14 }}>Xóa chữ ký</Text>
+                  <Text style={{ color: '#ef4444', fontWeight: '700', fontSize: 14 }}>Clear signature</Text>
                 </Pressable>
+              </View>
+
+              {/* Điều khoản khách xác nhận khi ký — khớp nội dung in trên hoá đơn */}
+              <View style={{
+                backgroundColor: '#f8fafc', borderRadius: 12,
+                paddingVertical: 10, paddingHorizontal: 14, marginBottom: 14,
+              }}>
+                <Text style={{ fontSize: 12, color: '#6b7280', lineHeight: 18 }}>
+                  I agree to pay the total amount shown. All sales are final — no refunds.
+                  By signing, I confirm that I received the services to my satisfaction.
+                </Text>
               </View>
 
               <Pressable
@@ -353,7 +371,7 @@ export default function CardCheckoutModal({
                 style={{ backgroundColor: '#7c3aed', borderRadius: 18, paddingVertical: 20, alignItems: 'center' }}
               >
                 <Text style={{ color: '#fff', fontWeight: '900', fontSize: 18 }}>
-                  {paths.length > 0 ? 'XÁC NHẬN & XUẤT HOÁ ĐƠN' : 'BỎ QUA & XUẤT HOÁ ĐƠN'}
+                  {paths.length > 0 ? 'CONFIRM & PRINT RECEIPT' : 'SKIP & PRINT RECEIPT'}
                 </Text>
               </Pressable>
             </>

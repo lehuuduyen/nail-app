@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Modal, Pressable, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, Text, View } from 'react-native';
+import NumPad from './NumPad';
 import { formatMoney } from '../utils/money';
 
 const QUICK_BILLS = [20, 50, 100];
@@ -142,21 +143,13 @@ export default function CashPaymentModal({
                 })}
               </View>
 
-              {/* Tender input */}
-              <Text style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Tiền khách đưa ($)</Text>
-              <TextInput
-                keyboardType="decimal-pad"
+              <NumPad
                 value={tender}
-                onChangeText={setTender}
-                placeholder="0.00"
-                placeholderTextColor="#d1d5db"
-                style={{
-                  borderWidth: 2,
-                  borderColor: tenderNum >= totalAmount && tenderNum > 0 ? '#16a34a' : '#e5e7eb',
-                  borderRadius: 14, paddingHorizontal: 18, paddingVertical: 12,
-                  fontSize: 28, fontWeight: '800', color: '#111827',
-                  marginBottom: 14,
-                }}
+                onChange={setTender}
+                label="Tiền khách đưa"
+                accentColor={tenderNum >= totalAmount && tenderNum > 0 ? '#16a34a' : '#1d4ed8'}
+                btnColor="#f0fdf4"
+                style={{ marginBottom: 14 }}
               />
 
               {/* Change display */}
@@ -198,22 +191,13 @@ export default function CashPaymentModal({
             </>
           ) : (
             <>
-              {/* Split mode */}
-              <Text style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Phần trả bằng tiền mặt ($)</Text>
-              <TextInput
-                keyboardType="decimal-pad"
+              <NumPad
                 value={cashPortion}
-                onChangeText={setCashPortion}
-                placeholder="0.00"
-                placeholderTextColor="#d1d5db"
-                style={{
-                  borderWidth: 2,
-                  borderColor: cashPortionNum > 0 && cashPortionNum < totalAmount ? '#2196F3' : '#e5e7eb',
-                  borderRadius: 14, paddingHorizontal: 18, paddingVertical: 12,
-                  fontSize: 28, fontWeight: '800', color: '#111827',
-                  marginBottom: 14,
-                }}
-                autoFocus
+                onChange={setCashPortion}
+                label="Phần trả bằng tiền mặt"
+                accentColor={cashPortionNum > 0 && cashPortionNum < totalAmount ? '#2196F3' : '#6b7280'}
+                btnColor="#eff6ff"
+                style={{ marginBottom: 14 }}
               />
 
               {/* Split breakdown */}

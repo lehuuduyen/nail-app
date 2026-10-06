@@ -1,7 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  FlatList,
+  Modal,
   Pressable,
   ScrollView,
   Switch,
@@ -13,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import OwnerGate from '../../components/OwnerGate';
 import StripeReaderModal from '../../components/StripeReaderModal';
 import { isStripeTerminalSupported } from '../../hooks/useStripeReaderConnection';
-import { isPrinterSupported, usePrinterConnection } from '../../hooks/usePrinterConnection';
+import { isBluetoothPrinterSupported, isPrinterSupported, isWifiPrinterSupported, usePrinterConnection } from '../../hooks/usePrinterConnection';
 import { buildTestPrintEscPos } from '../../utils/escpos';
 import { useOwnerStore } from '../../store/ownerStore';
 import { fetchSalonDisplayName } from '../../api/catalog';
@@ -82,6 +85,7 @@ export default function SettingsScreen() {
   const printer = usePrinterConnection();
   const [printerIpInput, setPrinterIpInput] = useState(printer.ip);
   const [printerPortInput, setPrinterPortInput] = useState(String(printer.port || 9100));
+  const [showBtModal, setShowBtModal] = useState(false);
 
   useEffect(() => {
     setPrinterIpInput(printer.ip);
@@ -105,7 +109,22 @@ export default function SettingsScreen() {
   }, [printer, printerIpInput, printerPortInput]);
 
   const handleTestPrint = useCallback(async () => {
-    const ok = await printer.send(buildTestPrintEscPos());
+    let ok = false;
+    if (printer.connectionType === 'bluetooth') {
+      const { BluetoothEscposPrinter } = require('react-native-bluetooth-escpos-printer');
+      try {
+        await BluetoothEscposPrinter.printerInit();
+        await BluetoothEscposPrinter.printText('TEST PRINT\n', {});
+        await BluetoothEscposPrinter.printText('Ket noi may in thanh cong!\n', {});
+        await BluetoothEscposPrinter.printAndFeed(3);
+        ok = true;
+      } catch (e) {
+        Alert.alert('Máy in', e?.message || 'In thử Bluetooth thất bại.');
+        return;
+      }
+    } else {
+      ok = await printer.send(buildTestPrintEscPos());
+    }
     if (!ok) {
       Alert.alert('Máy in', printer.lastError || 'In thử thất bại — kiểm tra kết nối máy in.');
     }
@@ -114,6 +133,21 @@ export default function SettingsScreen() {
   const handleDisconnectPrinter = useCallback(() => {
     printer.disconnect();
     Alert.alert('Máy in', 'Đã ngắt kết nối máy in.');
+  }, [printer]);
+
+  const handleOpenBtScan = useCallback(() => {
+    setShowBtModal(true);
+    printer.scanBtDevices();
+  }, [printer]);
+
+  const handleConnectBtDevice = useCallback(async (device) => {
+    setShowBtModal(false);
+    const ok = await printer.connectBt(device.name, device.address);
+    if (ok) {
+      Alert.alert('Bluetooth', `Đã kết nối máy in: ${device.name || device.address}`);
+    } else {
+      Alert.alert('Bluetooth', printer.lastError || 'Không kết nối được. Kiểm tra máy in đã bật chưa.');
+    }
   }, [printer]);
 
   const hydrate = useCallback(async () => {
@@ -463,75 +497,206 @@ export default function SettingsScreen() {
               </View>
 
               <Text className="text-[10px] font-bold text-white uppercase mb-3">
-                MÁY IN HOÁ ĐƠN (WIFI / LAN)
+                MÁY IN HOÁ ĐƠN (EPSON)
               </Text>
               <View className="bg-neutral-800 rounded-xl p-4 border border-neutral-700">
-                <View className="flex-row items-center mb-2">
+
+                {/* Trạng thái kết nối */}
+                <View className="flex-row items-center mb-3">
                   <View
                     className="w-3 h-3 rounded-full mr-2"
                     style={{ backgroundColor: printer.connected ? '#4caf50' : '#d32f2f' }}
                   />
-                  <Text className="text-white text-xs font-semibold flex-1">
-                    {printer.connected ? `Đã kết nối — ${printer.ip}:${printer.port}` : 'Chưa kết nối'}
+                  <Text className="text-white text-xs font-semibold flex-1" numberOfLines={1}>
+                    {printer.connected
+                      ? printer.connectionType === 'bluetooth'
+                        ? `Bluetooth — ${printer.btDeviceName || printer.btDeviceAddress}`
+                        : `WiFi — ${printer.ip}:${printer.port}`
+                      : 'Chưa kết nối'}
                   </Text>
                 </View>
-                <Text className="text-neutral-400 text-[10px] mb-3">
-                  {isPrinterSupported()
-                    ? 'Máy in nhiệt ESC/POS có cổng WiFi/Ethernet (giao thức RAW, cổng 9100).\nHoạt động trên cả iOS và Android — nhập IP máy in trong cùng mạng WiFi.'
-                    : 'Cần EAS Build để dùng máy in qua mạng.\nChạy: eas build --platform ios --profile development'}
-                </Text>
 
-                <View className="flex-row gap-2 mb-2">
-                  <TextInput
-                    value={printerIpInput}
-                    onChangeText={setPrinterIpInput}
-                    placeholder="Địa chỉ IP (vd: 192.168.1.50)"
-                    placeholderTextColor="#777"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="numbers-and-punctuation"
-                    className="flex-2 bg-neutral-900 text-white text-xs rounded-lg px-3 py-2 border border-neutral-700"
-                    style={{ flex: 2 }}
-                  />
-                  <TextInput
-                    value={printerPortInput}
-                    onChangeText={setPrinterPortInput}
-                    placeholder="9100"
-                    placeholderTextColor="#777"
-                    keyboardType="number-pad"
-                    className="bg-neutral-900 text-white text-xs rounded-lg px-3 py-2 border border-neutral-700"
-                    style={{ flex: 1 }}
-                  />
-                </View>
-
-                <View className="flex-row gap-2">
+                {/* Toggle WiFi / Bluetooth */}
+                <View className="flex-row mb-4 rounded-lg overflow-hidden border border-neutral-600">
                   <Pressable
-                    onPress={handleConnectPrinter}
-                    disabled={printer.connecting}
-                    className="flex-1 py-3 rounded-xl items-center border-2"
-                    style={{ borderColor: BLUE, opacity: printer.connecting ? 0.5 : 1 }}
+                    onPress={() => printer.setConnectionType('wifi')}
+                    className="flex-1 py-2 items-center"
+                    style={{ backgroundColor: printer.connectionType === 'wifi' ? BLUE : '#2a2a2a' }}
                   >
-                    <Text className="font-bold text-[10px]" style={{ color: '#64b5f6' }}>
-                      {printer.connecting ? 'ĐANG KẾT NỐI…' : 'KẾT NỐI MÁY IN'}
+                    <Text className="font-bold text-[11px]" style={{ color: printer.connectionType === 'wifi' ? '#fff' : '#888' }}>
+                      WiFi / LAN
                     </Text>
                   </Pressable>
                   <Pressable
-                    onPress={handleDisconnectPrinter}
-                    className="flex-1 py-3 rounded-xl items-center border-2"
-                    style={{ borderColor: '#555' }}
+                    onPress={() => printer.setConnectionType('bluetooth')}
+                    className="flex-1 py-2 items-center"
+                    style={{ backgroundColor: printer.connectionType === 'bluetooth' ? BLUE : '#2a2a2a' }}
                   >
-                    <Text className="font-bold text-[10px] text-neutral-400">NGẮT MÁY IN</Text>
+                    <Text className="font-bold text-[11px]" style={{ color: printer.connectionType === 'bluetooth' ? '#fff' : '#888' }}>
+                      Bluetooth
+                    </Text>
                   </Pressable>
                 </View>
-                <Pressable
-                  onPress={handleTestPrint}
-                  disabled={printer.connecting}
-                  className="mt-2 py-3 rounded-xl items-center"
-                  style={{ backgroundColor: BLUE, opacity: printer.connecting ? 0.5 : 1 }}
-                >
-                  <Text className="text-white font-bold text-[10px]">IN THỬ</Text>
-                </Pressable>
+
+                {/* ── WiFi panel ── */}
+                {printer.connectionType === 'wifi' && (
+                  <>
+                    <Text className="text-neutral-400 text-[10px] mb-3">
+                      {isWifiPrinterSupported()
+                        ? 'Giao thức RAW TCP cổng 9100. Máy in Epson TM-T88, TM-T20, TM-m30 có cổng LAN/WiFi.'
+                        : 'Cần EAS Build để dùng máy in qua mạng.'}
+                    </Text>
+                    <View className="flex-row gap-2 mb-2">
+                      <TextInput
+                        value={printerIpInput}
+                        onChangeText={setPrinterIpInput}
+                        placeholder="Địa chỉ IP (vd: 192.168.1.50)"
+                        placeholderTextColor="#777"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        keyboardType="numbers-and-punctuation"
+                        className="bg-neutral-900 text-white text-xs rounded-lg px-3 py-2 border border-neutral-700"
+                        style={{ flex: 2 }}
+                      />
+                      <TextInput
+                        value={printerPortInput}
+                        onChangeText={setPrinterPortInput}
+                        placeholder="9100"
+                        placeholderTextColor="#777"
+                        keyboardType="number-pad"
+                        className="bg-neutral-900 text-white text-xs rounded-lg px-3 py-2 border border-neutral-700"
+                        style={{ flex: 1 }}
+                      />
+                    </View>
+                    <View className="flex-row gap-2 mb-2">
+                      <Pressable
+                        onPress={handleConnectPrinter}
+                        disabled={printer.connecting}
+                        className="flex-1 py-3 rounded-xl items-center border-2"
+                        style={{ borderColor: BLUE, opacity: printer.connecting ? 0.5 : 1 }}
+                      >
+                        <Text className="font-bold text-[10px]" style={{ color: '#64b5f6' }}>
+                          {printer.connecting ? 'ĐANG KẾT NỐI…' : 'KẾT NỐI'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={handleDisconnectPrinter}
+                        className="flex-1 py-3 rounded-xl items-center border-2"
+                        style={{ borderColor: '#555' }}
+                      >
+                        <Text className="font-bold text-[10px] text-neutral-400">NGẮT</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                )}
+
+                {/* ── Bluetooth panel ── */}
+                {printer.connectionType === 'bluetooth' && (
+                  <>
+                    <Text className="text-neutral-400 text-[10px] mb-3">
+                      {isBluetoothPrinterSupported()
+                        ? 'Epson TM-m30, TM-T88 với adapter Bluetooth. Ghép đôi máy in trong Settings Android/iOS trước.'
+                        : 'Cần EAS Build để dùng Bluetooth.'}
+                    </Text>
+                    {printer.btDeviceAddress ? (
+                      <View className="bg-neutral-700 rounded-lg px-3 py-2 mb-2 flex-row items-center">
+                        <Ionicons name="bluetooth" size={14} color="#64b5f6" style={{ marginRight: 8 }} />
+                        <Text className="text-white text-xs flex-1" numberOfLines={1}>
+                          {printer.btDeviceName || printer.btDeviceAddress}
+                        </Text>
+                      </View>
+                    ) : null}
+                    <View className="flex-row gap-2 mb-2">
+                      <Pressable
+                        onPress={handleOpenBtScan}
+                        disabled={printer.btScanning || printer.connecting}
+                        className="flex-1 py-3 rounded-xl items-center border-2"
+                        style={{ borderColor: BLUE, opacity: (printer.btScanning || printer.connecting) ? 0.5 : 1 }}
+                      >
+                        <Text className="font-bold text-[10px]" style={{ color: '#64b5f6' }}>
+                          {printer.btScanning ? 'ĐANG QUÉT…' : 'CHỌN MÁY IN BT'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={handleDisconnectPrinter}
+                        className="flex-1 py-3 rounded-xl items-center border-2"
+                        style={{ borderColor: '#555' }}
+                      >
+                        <Text className="font-bold text-[10px] text-neutral-400">NGẮT</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                )}
+
+                {/* Nút in thử — hiện khi đã kết nối */}
+                {printer.connected && (
+                  <Pressable
+                    onPress={handleTestPrint}
+                    disabled={printer.connecting}
+                    className="mt-1 py-3 rounded-xl items-center"
+                    style={{ backgroundColor: BLUE, opacity: printer.connecting ? 0.5 : 1 }}
+                  >
+                    <Text className="text-white font-bold text-[10px]">IN THỬ</Text>
+                  </Pressable>
+                )}
               </View>
+
+              {/* Modal chọn thiết bị Bluetooth */}
+              <Modal visible={showBtModal} transparent animationType="slide" onRequestClose={() => setShowBtModal(false)}>
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' }}>
+                  <View style={{ backgroundColor: '#1e1e1e', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32, maxHeight: '70%' }}>
+                    <View className="flex-row items-center mb-4">
+                      <Text className="text-white font-extrabold text-base flex-1">CHỌN MÁY IN BLUETOOTH</Text>
+                      <Pressable onPress={() => setShowBtModal(false)}>
+                        <Ionicons name="close" size={22} color="#aaa" />
+                      </Pressable>
+                    </View>
+
+                    {printer.btScanning && (
+                      <View className="items-center py-8">
+                        <ActivityIndicator color={BLUE} size="large" />
+                        <Text className="text-neutral-400 text-xs mt-3">Đang quét thiết bị…</Text>
+                      </View>
+                    )}
+
+                    {!printer.btScanning && printer.btDevices.length === 0 && (
+                      <View className="items-center py-8">
+                        <Ionicons name="bluetooth-outline" size={40} color="#555" />
+                        <Text className="text-neutral-400 text-xs mt-3 text-center">
+                          Không tìm thấy thiết bị.{'\n'}Ghép đôi máy in trong Settings của điện thoại trước.
+                        </Text>
+                        <Pressable
+                          onPress={() => printer.scanBtDevices()}
+                          className="mt-4 px-6 py-2 rounded-lg border border-neutral-600"
+                        >
+                          <Text className="text-neutral-300 text-xs font-bold">QUÉT LẠI</Text>
+                        </Pressable>
+                      </View>
+                    )}
+
+                    {!printer.btScanning && printer.btDevices.length > 0 && (
+                      <FlatList
+                        data={printer.btDevices}
+                        keyExtractor={(item) => item.address}
+                        renderItem={({ item }) => (
+                          <Pressable
+                            onPress={() => handleConnectBtDevice(item)}
+                            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#2a2a2a' }}
+                          >
+                            <Ionicons name="print-outline" size={20} color="#64b5f6" style={{ marginRight: 12 }} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{item.name || '(Không tên)'}</Text>
+                              <Text style={{ color: '#888', fontSize: 10, marginTop: 2 }}>{item.address}</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={16} color="#555" />
+                          </Pressable>
+                        )}
+                      />
+                    )}
+                  </View>
+                </View>
+              </Modal>
+
             </View>
           ) : null}
 
