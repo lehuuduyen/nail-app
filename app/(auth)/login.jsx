@@ -10,9 +10,11 @@ import {
 } from 'react-native';
 import api from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
+import { useErrorLogStore } from '../../store/errorLogStore';
 
 export default function LoginScreen() {
   const setAuth = useAuthStore((s) => s.setAuth);
+  const logError = useErrorLogStore((s) => s.logError);
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin123');
   const [loading, setLoading] = useState(false);
@@ -25,7 +27,15 @@ export default function LoginScreen() {
       const { data } = await api.post('/api/auth/login', { username, password });
       setAuth(data.token, data.user);
       router.replace('/(pos)');
-    } catch {
+    } catch (e) {
+      const logEntry = {
+        source: 'login',
+        username,
+        status: e?.response?.status ?? null,
+        message: e?.response?.data?.error || e?.message || 'Unknown error',
+      };
+      logError(logEntry);
+      api.post('/api/login-error-logs', logEntry).catch(() => {});
       setErr('Invalid credentials — try admin / admin123 or use offline');
     } finally {
       setLoading(false);

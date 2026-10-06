@@ -4,7 +4,6 @@ import { Alert, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { formatMoney } from '../utils/money';
 import { usePrinterConnection } from '../hooks/usePrinterConnection';
-import { buildReceiptEscPos } from '../utils/escpos';
 
 const SALON_NAME  = process.env.EXPO_PUBLIC_SALON_NAME  || 'NICE NAILS & SPA';
 const SALON_ADDR  = process.env.EXPO_PUBLIC_SALON_ADDRESS || '8048 N 19Th Ave';
@@ -138,7 +137,7 @@ function buildPrintHtml(d) {
   if ((isCard || isSplit) && cardLast4) {
     const brand = (cardBrand || 'CARD').toUpperCase();
     cardInfo += `<div>${brand}-${cardLast4}</div>`;
-    cardInfo += `<div>CARDHOLDER</div>`;
+    cardInfo += `<div>CARDHOLDER${d.cardholderName ? ': ' + String(d.cardholderName).toUpperCase() : ''}</div>`;
     cardInfo += `<div>Card Entry: ${entryMode.toUpperCase()}</div>`;
     if (authCode) cardInfo += `<div>Auth Code: ${authCode}</div>`;
     if (aid)      cardInfo += `<div>AID: ${aid}</div>`;
@@ -247,13 +246,13 @@ export default function ReceiptModal({ visible, onDone, receiptData, signaturePa
   };
 
   const handleThermalPrint = async () => {
-    if (!printer.ip) {
+    if (!printer.isConfigured) {
       Alert.alert('Máy in nhiệt', 'Chưa cấu hình máy in. Vào Cài đặt → Thiết bị để kết nối máy in.');
       return;
     }
     setThermalPrinting(true);
     try {
-      const ok = await printer.send(buildReceiptEscPos(d));
+      const ok = await printer.printReceipt(d);
       if (!ok) {
         Alert.alert('Máy in nhiệt', printer.lastError || 'In thất bại — kiểm tra kết nối máy in.');
       }
@@ -339,7 +338,7 @@ export default function ReceiptModal({ visible, onDone, receiptData, signaturePa
               <>
                 <Text style={styles.div}>{'—'.repeat(32)}</Text>
                 <Text style={[styles.mono, { fontWeight: '700' }]}>{(cardBrand || 'CARD').toUpperCase()}-{cardLast4}</Text>
-                <Text style={styles.mono}>CARDHOLDER</Text>
+                <Text style={styles.mono}>CARDHOLDER{d.cardholderName ? `: ${String(d.cardholderName).toUpperCase()}` : ''}</Text>
                 <Text style={styles.mono}>Card Entry: {d.entryMode?.toUpperCase() || 'CONTACTLESS'}</Text>
                 {d.authCode ? <Text style={styles.mono}>Auth Code: {d.authCode}</Text> : null}
                 {d.aid       ? <Text style={styles.mono}>AID: {d.aid}</Text> : null}
@@ -401,7 +400,7 @@ export default function ReceiptModal({ visible, onDone, receiptData, signaturePa
           >
             <Text style={{ color: '#fff', fontWeight: '800', fontSize: 17 }}>In biên lai</Text>
           </Pressable>
-          {printer.ip ? (
+          {printer.isConfigured ? (
             <Pressable
               onPress={handleThermalPrint}
               disabled={thermalPrinting}
@@ -412,7 +411,11 @@ export default function ReceiptModal({ visible, onDone, receiptData, signaturePa
               }}
             >
               <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>
-                {thermalPrinting ? 'Đang in…' : `In qua máy in nhiệt (${printer.ip})`}
+                {thermalPrinting
+                  ? 'Đang in…'
+                  : printer.connectionType === 'bluetooth'
+                    ? `In qua Bluetooth (${printer.btDeviceName || printer.btDeviceAddress})`
+                    : `In qua máy in nhiệt (${printer.ip})`}
               </Text>
             </Pressable>
           ) : null}

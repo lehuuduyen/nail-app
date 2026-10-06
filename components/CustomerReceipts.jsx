@@ -1,4 +1,4 @@
-import { ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 
 const HEADER = '#9eccc9';
 const HEADER_TEXT = '#004d40';
@@ -8,6 +8,9 @@ export default function CustomerReceipts({
   paidReceipts = [],
   unpaidReceipts = [],
   daySubtext = '',
+  onOpenLocalReceipt,
+  storageError,
+  onRetryStorage,
 }) {
   return (
     <View style={{ flex: 1, backgroundColor: '#f7f7f7', margin: 4, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: '#ccc' }}>
@@ -58,22 +61,22 @@ export default function CustomerReceipts({
           <View style={{ backgroundColor: PAID_BAND, paddingVertical: 4, paddingHorizontal: 6, marginTop: 10, marginBottom: 4 }}>
             <Text style={{ fontSize: 10, fontWeight: '800', color: '#111' }}>Unpaid Receipts</Text>
           </View>
+          {storageError ? (
+            <Pressable onPress={onRetryStorage} accessibilityRole="button">
+              <Text style={{ color: '#b91c1c', fontSize: 11, padding: 8 }}>{storageError} Nhấn để thử lại.</Text>
+            </Pressable>
+          ) : null}
           {unpaidReceipts.length === 0 ? (
             <Text style={{ fontSize: 10, color: '#888', fontStyle: 'italic', padding: 8 }}>None</Text>
-          ) : (
-            unpaidReceipts.map((r) => (
-              <View key={String(r.id)} style={{ borderBottomWidth: 1, borderBottomColor: '#eee', paddingVertical: 6, paddingHorizontal: 4 }}>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
-                  <Text style={{ fontSize: 10, fontWeight: '800', color: '#111', marginRight: 8 }}>{r.id}</Text>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#111', marginRight: 8 }}>{r.paymentType}</Text>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#c62828' }}>${r.total}</Text>
-                </View>
-                {r.serviceBy ? (
-                  <Text style={{ fontSize: 9, color: '#555', marginTop: 4 }}>{r.serviceBy}</Text>
-                ) : null}
-              </View>
-            ))
-          )}
+          ) : unpaidReceipts.map((r) => (
+            <Pressable key={r.key || `api:${r.id}`} disabled={!r.local}
+              onPress={() => onOpenLocalReceipt?.(r)} accessibilityRole={r.local ? 'button' : undefined}
+              style={{ borderBottomWidth: 1, borderBottomColor: '#eee', paddingVertical: 8, paddingHorizontal: 4,
+                flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+              <Text style={{ flex: 1, fontSize: 11, fontWeight: '700', color: '#111' }}>{r.serviceBy}</Text>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#c62828' }}>${r.total}</Text>
+            </Pressable>
+          ))}
         </View>
       </ScrollView>
     </View>

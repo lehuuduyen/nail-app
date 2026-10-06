@@ -42,6 +42,17 @@ const REPORT_SECTIONS = [
       { key: 'o-ped', label: 'Pedicure Log By Range', icon: '📊', route: '/(pos)/reports/owner-advanced/pedicure-log' },
     ],
   },
+  {
+    title: 'SERVICE STATISTICS',
+    items: [
+      {
+        key: 'svc-range',
+        label: 'Thống kê Dịch vụ theo Khoảng thời gian',
+        icon: '⭐',
+        route: '/(pos)/reports/services/by-range',
+      },
+    ],
+  },
 ];
 
 function ReportRow({ label, iconText, onPress }) {

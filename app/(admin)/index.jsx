@@ -138,9 +138,15 @@ export default function AdminDashboard() {
         </Pressable>
         <Pressable
           onPress={() => router.push('/(admin)/payroll')}
-          className="bg-white border border-neutral-200 rounded-xl p-4 mb-4 active:opacity-70"
+          className="bg-white border border-neutral-200 rounded-xl p-4 mb-2 active:opacity-70"
         >
           <Text className="font-semibold">Run Payroll</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => router.push('/(admin)/logs')}
+          className="bg-white border border-neutral-200 rounded-xl p-4 mb-4 active:opacity-70"
+        >
+          <Text className="font-semibold">Login Error Logs</Text>
         </Pressable>
       </ScrollView>
     </View>

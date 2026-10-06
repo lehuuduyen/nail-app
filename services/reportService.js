@@ -59,6 +59,11 @@ export async function getPedicureLog(startDate, endDate) {
   return data;
 }
 
+export async function getServicesByRange(startDate, endDate) {
+  const { data } = await api.get('/api/reports/services/by-range', { params: { startDate, endDate } });
+  return data;
+}
+
 function addDaysStr(ymd, days) {
   const [y, m, d] = String(ymd).split('-').map(Number);
   const dt = new Date(y, m - 1, d);
