@@ -281,6 +281,7 @@ export default function NewTicketScreen() {
   const appliedOpenRef = useRef(null);
   const saveBusyRef = useRef(false);
   const [saving, setSaving] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const ticketGeneration = usePosStore((s) => s.ticketGeneration);
   const observedGenerationRef = useRef(ticketGeneration);
   useEffect(() => {
@@ -356,7 +357,8 @@ export default function NewTicketScreen() {
       usePosStore.setState({ localTicketId: id });
       const snapshot = ticketSnapshot(state, { selectedCustomer, turnType, linkedAppointmentId, pendingLineStaff });
       await useLocalTicketStore.getState().save(id, snapshot, state.getTotal());
-      Alert.alert('Save', 'Ticket đã được lưu trên thiết bị.');
+      resetLocalTicketUi();
+      router.replace('/(pos)');
     } catch {
       Alert.alert('Không lưu được ticket', 'Nội dung đang sửa vẫn được giữ. Vui lòng thử Save lại.');
     } finally {
@@ -600,9 +602,21 @@ export default function NewTicketScreen() {
     setSelectedCustomer(null);
   };
 
-  const exitClear = () => {
-    resetLocalTicketUi();
-    router.back();
+  const exitClear = async () => {
+    if (saveBusyRef.current) return;
+    saveBusyRef.current = true;
+    setCancelling(true);
+    try {
+      const id = usePosStore.getState().localTicketId;
+      if (id) await useLocalTicketStore.getState().remove(id);
+      resetLocalTicketUi();
+      router.replace('/(pos)');
+    } catch {
+      Alert.alert('Không huỷ được ticket', 'Chưa xoá được ticket trên thiết bị. Nội dung đang sửa vẫn được giữ. Vui lòng thử Cancel lại.');
+    } finally {
+      saveBusyRef.current = false;
+      setCancelling(false);
+    }
   };
 
   const openCustomerModal = useCallback(async () => {
@@ -1655,9 +1669,10 @@ export default function NewTicketScreen() {
           <Text className="text-[10px] text-neutral-500">{now}</Text>
           <Pressable
             onPress={exitClear}
+            disabled={saving || cancelling}
             className="bg-primary rounded-xl py-2 px-3 mt-1 self-start"
           >
-            <Text className="text-white font-bold text-xs">CANCEL</Text>
+            <Text className="text-white font-bold text-xs">{cancelling ? 'CANCELLING…' : 'CANCEL'}</Text>
           </Pressable>
         </View>
         <View className="flex-1 items-center justify-center px-1">
@@ -1671,7 +1686,7 @@ export default function NewTicketScreen() {
         <View className="w-[20%] items-end gap-1">
           <Pressable
             onPress={saveLocalTicket}
-            disabled={saving}
+            disabled={saving || cancelling}
             className="bg-primary rounded-xl py-2 px-3"
           >
             <Text className="text-white font-bold text-xs">{saving ? 'SAVING…' : 'SAVE'}</Text>

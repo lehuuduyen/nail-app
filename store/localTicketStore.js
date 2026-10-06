@@ -26,6 +26,17 @@ export function createLocalTicketStore(storage, createStore = create) {
       })();
       return hydration;
     },
+    remove: (id) => {
+      const operation = queue.catch(() => {}).then(async () => {
+        await get().hydrate();
+        const tickets = get().tickets.filter((ticket) => ticket.id !== id);
+        if (tickets.length === get().tickets.length) return;
+        await storage.setItem(LOCAL_TICKET_KEY, JSON.stringify({ version: 1, tickets }));
+        set({ tickets, error: null });
+      });
+      queue = operation;
+      return operation;
+    },
     save: (id, snapshot, total) => {
       const copy = cloneTicket(snapshot);
       const operation = queue.catch(() => {}).then(async () => {

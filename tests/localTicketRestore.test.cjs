@@ -13,7 +13,7 @@ function evaluate(node, bindings) {
 }
 test('Save handler blocks double tap, waits for success and retries same ID without network/payment bindings', async () => {
   let finish; let calls = 0; let fail = false;
-  const alerts = []; const ids = [];
+  const alerts = []; const ids = []; const closed = [];
   const state = { localTicketId: null, getTotal: () => 123 };
   const handler = evaluate(save, {
     saveBusyRef: { current: false }, setSaving: () => {},
@@ -25,11 +25,13 @@ test('Save handler blocks double tap, waits for success and retries same ID with
     newTicketId: () => 'stable', ticketSnapshot: () => ({}),
     selectedCustomer: null, turnType: 'walk_in', linkedAppointmentId: null, pendingLineStaff: null,
     Alert: { alert: (...args) => alerts.push(args) },
+    resetLocalTicketUi: () => { closed.push('reset'); state.localTicketId = null; },
+    router: { replace: (route) => closed.push(route) },
   });
-  const first = handler(); await handler(); assert.equal(calls, 1); assert.equal(alerts.length, 0);
-  fail = true; finish(); await first; assert.equal(alerts[0][0], 'Không lưu được ticket');
+  const first = handler(); await handler(); assert.equal(calls, 1); assert.equal(alerts.length, 0); assert.deepEqual(closed, []);
+  fail = true; finish(); await first; assert.equal(alerts[0][0], 'Không lưu được ticket'); assert.deepEqual(closed, []); assert.equal(state.localTicketId, 'stable');
   fail = false; const retry = handler(); finish(); await retry;
-  assert.deepEqual(ids, ['stable', 'stable']); assert.equal(alerts[1][0], 'Save');
+  assert.deepEqual(ids, ['stable', 'stable']); assert.equal(alerts.length, 1); assert.deepEqual(closed, ['reset', '/(pos)']); assert.equal(state.localTicketId, null);
 });
 test('focus request restores component state once per request, switches tickets and resets a new ticket', () => {
   const expression = screen.body.body.find((n) => n.type === 'ExpressionStatement' &&
@@ -75,7 +77,8 @@ test('Home → Appointment and receipt A → Appointment → Save detach ID and 
   const values = {}; const params = {};
   const setters = Object.fromEntries(['SelectedCustomer','TurnType','LinkedAppointmentId','PendingLineStaff','CustomOpen','SvcPriceModal','CustomerModalOpen','TechModalOpen','DiscountOpen','TipOpen','DiscountInput','TipInput','AmountStr','CustomBaseServices','CustomName'].map((key) => [`set${key}`, (v) => { values[key] = v; }]));
   const bindings = { usePosStore: pos, useLocalTicketStore: local, params,
-    router: { setParams: (next) => Object.assign(params, next) },
+    router: { setParams: (next) => Object.assign(params, next), replace: () => {} },
+    resetLocalTicketUi: () => pos.getState().clearTicket(),
     routeParamFirst: (v) => String(v ?? ''), TURN_TYPE_OPTIONS: [{ key: 'appointment' }],
     appliedOpenRef: { current: null }, staffParamsAppliedRef: { current: false }, observedGenerationRef: { current: 0 }, ...setters };
   const focus = () => evaluate(callback, bindings)();
@@ -126,7 +129,8 @@ for (const button of ['Chỉ mở vé POS', 'Mở vé POS']) {
     const values = {}; const params = {};
     const setters = Object.fromEntries(['SelectedCustomer','TurnType','LinkedAppointmentId','PendingLineStaff','CustomOpen','SvcPriceModal','CustomerModalOpen','TechModalOpen','DiscountOpen','TipOpen','DiscountInput','TipInput','AmountStr','CustomBaseServices','CustomName'].map((key) => [`set${key}`, (v) => { values[key] = v; }]));
     const bindings = { usePosStore: pos, useLocalTicketStore: { getState: () => local }, params,
-      router: { setParams: (next) => Object.assign(params, next) }, routeParamFirst: (v) => String(v ?? ''),
+      router: { setParams: (next) => Object.assign(params, next), replace: () => {} },
+      resetLocalTicketUi: () => pos.getState().clearTicket(), routeParamFirst: (v) => String(v ?? ''),
       TURN_TYPE_OPTIONS: [{ key: 'appointment' }], appliedOpenRef: { current: null }, staffParamsAppliedRef: { current: false }, observedGenerationRef: { current: 0 }, ...setters };
     const expression = screen.body.body.find((n) => n.type === 'ExpressionStatement' && n.expression.callee?.name === 'useFocusEffect');
     const focus = () => evaluate(expression.expression.arguments[0].arguments[0], bindings)();
@@ -165,9 +169,32 @@ for (const button of ['Chỉ mở vé POS', 'Mở vé POS']) {
         linkedAppointmentId: values.LinkedAppointmentId, pendingLineStaff: values.PendingLineStaff,
         Alert: { alert: () => {} } });
       await handler();
-      assert.equal(pos.getState().localTicketId, `new-${nonce}`);
+      assert.equal(pos.getState().localTicketId, null);
+      assert.deepEqual(pos.getState().lines, []);
+      assert.ok(tickets.some((t) => t.id === `new-${nonce}`));
       assert.equal(JSON.stringify(tickets[0]), original);
     }
     assert.equal(new Set(tickets.map((t) => t.id)).size, 3);
   });
 }
+test('Cancel waits for deletion, blocks duplicate taps and Save, retains draft on failure and retries same ID', async () => {
+  const cancel = screen.body.body.find((n) => n.type === 'VariableDeclaration' && n.declarations[0].id.name === 'exitClear').declarations[0].init;
+  let resolve; let reject; const ids = []; const closed = []; const alerts = [];
+  const busy = { current: false };
+  const handler = evaluate(cancel, {
+    saveBusyRef: busy, setCancelling: () => {},
+    usePosStore: { getState: () => ({ localTicketId: 'A' }) },
+    useLocalTicketStore: { getState: () => ({ remove: (id) => {
+      ids.push(id); return new Promise((ok, fail) => { resolve = ok; reject = fail; });
+    } }) },
+    resetLocalTicketUi: () => closed.push('reset'), router: { replace: (route) => closed.push(route) },
+    Alert: { alert: (...args) => alerts.push(args) },
+  });
+  const first = handler(); await handler();
+  await evaluate(save, { saveBusyRef: busy })();
+  assert.deepEqual(ids, ['A']); assert.deepEqual(closed, []);
+  reject(Error('disk full')); await first;
+  assert.equal(alerts.length, 1); assert.deepEqual(closed, []); assert.equal(busy.current, false);
+  const retry = handler(); resolve(); await retry;
+  assert.deepEqual(ids, ['A', 'A']); assert.deepEqual(closed, ['reset', '/(pos)']);
+});

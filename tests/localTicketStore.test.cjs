@@ -92,3 +92,31 @@ test('Phoenix boundary independent of device zone; original day retained on edit
   assert.equal(next.getState().tickets.filter((t) => t.day === utils.phoenixDay()).length, 0);
   assert.equal(JSON.parse(disk.value).tickets.length, 1);
 });
+test('Cancel serializes with saves, waits for hydration, preserves other tickets and survives restart', async () => {
+  const disk = storage(); const snap = utils.ticketSnapshot(sample().getState(), ui);
+  const seed = factory(disk); await seed.getState().save('old', snap, 1);
+  let release;
+  disk.getItem = () => new Promise((resolve) => { release = () => resolve(disk.value); });
+  const store = factory(disk);
+  const save = store.getState().save('A', snap, 2);
+  const cancel = store.getState().remove('A');
+  const other = store.getState().save('B', snap, 3);
+  await new Promise(setImmediate); assert.equal(disk.writes, 1);
+  release(); await Promise.all([save, cancel, other]);
+  assert.deepEqual(store.getState().tickets.map((t) => t.id), ['old', 'B']);
+  disk.getItem = async () => disk.value;
+  const restarted = factory(disk); await restarted.getState().hydrate();
+  assert.deepEqual(restarted.getState().tickets.map((t) => t.id), ['old', 'B']);
+});
+test('Cancel write failure retains receipt until retry; corrupt storage cannot be erased', async () => {
+  const disk = storage(); const store = factory(disk);
+  await store.getState().save('A', utils.ticketSnapshot(sample().getState(), ui), 1);
+  const original = disk.value; disk.fail = true;
+  await assert.rejects(store.getState().remove('A'));
+  assert.equal(disk.value, original); assert.equal(store.getState().tickets.length, 1);
+  disk.fail = false; await store.getState().remove('A');
+  assert.equal(store.getState().tickets.length, 0);
+  const broken = storage('broken');
+  await assert.rejects(factory(broken).getState().remove('A'));
+  assert.equal(broken.value, 'broken'); assert.equal(broken.writes, 0);
+});
