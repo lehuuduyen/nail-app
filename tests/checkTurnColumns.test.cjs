@@ -72,3 +72,53 @@ test('changed UI modules parse', () => {
     assert.doesNotThrow(() => parser.parse(read(file), { sourceType: 'module', plugins: ['jsx'] }));
   }
 });
+
+test('successful persistence removes only the captured Save ID after all server rows, even after POS reset', async () => {
+  const events = [];
+  let tickets = [saved([{ price: 100 }]), { ...saved([{ price: 50 }]), id: 'other' }];
+  const source = read('app/(pos)/new-ticket.jsx').split('const persistPayloadsToApi = useCallback(')[1].split('\n  }, []);')[0] + '\n  }';
+  const persist = new Function('api', 'usePosStore', 'useLocalTicketStore', 'Alert', `return (${source});`)(
+    { post: async () => { events.push('post'); } },
+    { getState: () => ({ localTicketId: null, bumpHomeRefresh: () => events.push('refresh') }) },
+    { getState: () => ({ remove: async (id) => { events.push(id); tickets = tickets.filter((t) => t.id !== id); } }) },
+    { alert: () => assert.fail('Unexpected alert') }
+  );
+  assert.equal(await persist([{ canApi: true, body: {}, localTicketId: 'ticket' }, { canApi: true, body: {}, localTicketId: 'ticket' }]), true);
+  assert.deepEqual(events, ['post', 'post', 'ticket', 'refresh']);
+  assert.deepEqual(tickets.map((t) => t.id), ['other']);
+  const [column] = run(tickets.filter((t) => t.id === 'ticket'), [{ employeeId: 1, rows: [{ serviceTotal: 100, turns: 1 }] }]);
+  assert.equal(column.totalAmount, 100); assert.equal(column.totalTurns, 1); assert.equal(column.hasSaved, false);
+});
+
+test('failed server save retains local copy; storage retry never repeats transaction posts', async () => {
+  const source = read('app/(pos)/new-ticket.jsx').split('const persistPayloadsToApi = useCallback(')[1].split('\n  }, []);')[0] + '\n  }';
+  let postFails = true; let diskFails = true; let posts = 0; let removes = 0; let retry;
+  const persist = new Function('api', 'usePosStore', 'useLocalTicketStore', 'Alert', `return (${source});`)(
+    { post: async () => { posts++; if (postFails) throw Error('offline'); } },
+    { getState: () => ({ bumpHomeRefresh() {} }) },
+    { getState: () => ({ remove: async () => { removes++; if (diskFails) throw Error('disk full'); } }) },
+    { alert: (title, message, buttons) => { if (buttons) retry = buttons[0].onPress; } }
+  );
+  const payloads = [{ canApi: true, body: {}, localTicketId: 'ticket' }];
+  assert.equal(await persist(payloads), false); assert.equal(removes, 0);
+  postFails = false;
+  assert.equal(await persist(payloads), true); assert.equal(posts, 2); assert.equal(removes, 1);
+  diskFails = false;
+  await retry(); assert.equal(posts, 2); assert.equal(removes, 2);
+  assert.equal(await persist([{ canApi: false, body: {}, localTicketId: 'ticket' }]), true);
+  assert.equal(removes, 2); // No server copy exists for local-only checkout.
+});
+
+test('periodic refresh updates Check Turn independently of rotation and handles offline', async () => {
+  const source = read('components/PublicHomeScreen.jsx').split('const refreshTurnsOnly = useCallback(')[1].split('\n  }, []);')[0] + '\n  }';
+  let failRotation = true; let failColumns = false; let columns; let rotation;
+  const refresh = new Function('getSalonDateYmd', 'fetchTurnsForDate', 'fetchCheckTurnColumns', 'setCheckTurnSnapshot', 'setTurnSnapshot', `return (${source});`)(
+    () => dayYmd,
+    async () => { if (failRotation) throw Error('offline'); return { employees: [], suggested: 7, total: 4 }; },
+    async (date) => { assert.equal(date, dayYmd); if (failColumns) throw Error('offline'); return { columns: [] }; },
+    (value) => { columns = value; }, (value) => { rotation = value; }
+  );
+  await refresh(); assert.deepEqual(columns, { columns: [] }); assert.equal(rotation, undefined);
+  failRotation = false; failColumns = true;
+  await refresh(); assert.equal(columns, null); assert.equal(rotation.suggested, 7); assert.equal(rotation.rotationTotal, 4);
+});

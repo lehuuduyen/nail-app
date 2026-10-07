@@ -734,6 +734,7 @@ export default function NewTicketScreen() {
         }
         return {
           line,
+          localTicketId: usePosStore.getState().localTicketId,
           employeeId: eid,
           serviceId: svcId,
           body,
@@ -764,6 +765,22 @@ export default function NewTicketScreen() {
         }
         await api.post('/api/transactions', body);
       }
+      // Keep the ID on the payload: receipt flows can clear POS state before saving.
+      // Cleanup retries must never re-submit an already-paid transaction.
+      const localTicketId = payloads[0]?.localTicketId;
+      const removeSavedCopy = async () => {
+        if (!localTicketId) return;
+        try {
+          await useLocalTicketStore.getState().remove(localTicketId);
+        } catch {
+          Alert.alert(
+            'Đã lưu giao dịch',
+            'Chưa xoá được bản Save trên thiết bị. Check Turn có thể đếm trùng. Thử xoá lại bản Save, không thanh toán lại.',
+            [{ text: 'Thử lại', onPress: removeSavedCopy }]
+          );
+        }
+      };
+      await removeSavedCopy();
       usePosStore.getState().bumpHomeRefresh();
       return true;
     } catch {

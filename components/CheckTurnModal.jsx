@@ -17,7 +17,7 @@ export default function CheckTurnModal({
   dateLabel,
 }) {
   const [details, setDetails] = useState(null);
-  useEffect(() => { setDetails(null); }, [visible, columns]);
+  useEffect(() => { setDetails(null); }, [visible]);
   const list = Array.isArray(columns) ? columns : [];
   const total = list.reduce((sum, column) => sum + column.totalTurns, 0);
   const close = () => { setDetails(null); onClose(); };

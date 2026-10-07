@@ -142,7 +142,12 @@ export default function PublicHomeScreen() {
   const refreshTurnsOnly = useCallback(async () => {
     const salonYmd = getSalonDateYmd();
     try {
-      const data = await fetchTurnsForDate(salonYmd);
+      const [data, checkTurnRes] = await Promise.all([
+        fetchTurnsForDate(salonYmd).catch(() => null),
+        fetchCheckTurnColumns(salonYmd).catch(() => null),
+      ]);
+      setCheckTurnSnapshot(checkTurnRes);
+      if (!data) return;
       setTurnSnapshot({
         employees: data.employees || [],
         suggested: data.suggested ?? null,
