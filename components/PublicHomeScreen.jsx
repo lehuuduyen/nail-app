@@ -95,16 +95,18 @@ export default function PublicHomeScreen() {
       );
 
     try {
-      const [emps, txRes, turnRes, checkTurnRes] = await Promise.all([
+      const [emps, txRes, turnRes] = await Promise.all([
         fetchCatalogEmployees(),
         api.get('/api/transactions', {
           params: { limit: 200, date: salonYmd },
         }),
         fetchTurnsForDate(salonYmd).catch(() => null),
-        fetchCheckTurnColumns(salonYmd).catch(() => null),
+        fetchCheckTurnColumns(salonYmd).catch(() => null).then((result) => {
+          // A receipts/catalog failure must not discard a successful Check Turn refresh.
+          if (result) setCheckTurnSnapshot(result);
+          setCheckTurnUnavailable(!result);
+        }),
       ]);
-      if (checkTurnRes) setCheckTurnSnapshot(checkTurnRes);
-      setCheckTurnUnavailable(!checkTurnRes);
       const list = emps;
       if (list.length) {
         const main = list.map((e, i) => mapApiEmployeeToPosStaff(e, i));
@@ -122,7 +124,6 @@ export default function PublicHomeScreen() {
         });
       }
     } catch {
-      setCheckTurnUnavailable(true);
       setStaff([...SAMPLE_STAFF, ...mapLocal(localExtras, SAMPLE_STAFF.length)]);
       setTransactions([]);
     }
@@ -316,7 +317,10 @@ export default function PublicHomeScreen() {
             usePosStore.getState().setStaff(null, null);
             router.push('/(pos)/new-ticket');
           }}
-          onCheckTurns={() => setCheckTurnOpen(true)}
+          onCheckTurns={() => {
+            setCheckTurnOpen(true);
+            refreshTurnsOnly();
+          }}
         />
       </View>
 

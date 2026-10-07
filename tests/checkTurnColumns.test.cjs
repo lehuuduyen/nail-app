@@ -120,3 +120,28 @@ test('checkout sends gross reporting basis without changing payment allocation',
   const [column] = build({ apiColumns: [{ employeeId: 1, nickname: 'LI', rows: [] }], employees: [{ id: 1, firstName: 'Lisa', nickname: null }] });
   assert.equal(column.name, 'LI (0)');
 });
+
+
+test('load preserves fresh Check Turn data when receipts fail', async () => {
+  const source = read('components/PublicHomeScreen.jsx').split('const load = useCallback(')[1].split('\n  }, []);')[0] + '\n  }';
+  const response = { date: dayYmd, columns: [{ employeeId: 1, rows: [] }] };
+  let columns; let unavailable;
+  const values = {
+    getSalonDateYmd: () => dayYmd,
+    fetchSalonDisplayName: async () => null,
+    loadSetting: async () => null, SETTING_KEYS: {}, setStoreTitle: () => {},
+    useLocalCatalogStore: { getState: () => ({ employees: [] }) },
+    mapApiEmployeeToPosStaff: (e) => e, SAMPLE_STAFF: [],
+    fetchCatalogEmployees: async () => [],
+    api: { get: async () => { throw Error('receipts unavailable'); } },
+    fetchTurnsForDate: async () => null,
+    fetchCheckTurnColumns: async () => response,
+    setCheckTurnSnapshot: (value) => { columns = value; },
+    setCheckTurnUnavailable: (value) => { unavailable = value; },
+    setStaff: () => {}, setTransactions: () => {}, setTurnSnapshot: () => {},
+  };
+  const load = new Function(...Object.keys(values), `return (${source});`)(...Object.values(values));
+  await load();
+  assert.equal(columns, response);
+  assert.equal(unavailable, false);
+});
