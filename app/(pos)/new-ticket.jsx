@@ -694,6 +694,9 @@ export default function NewTicketScreen() {
       const tip = usePosStore.getState().tip;
       const serviceBase = getCardFeeBase();
       const weights = lines.map((l) => Number(l.price) * (l.qty || 1));
+      // Reporting only: gross money and post-discount turn basis are separate.
+      const subtotal = weights.reduce((sum, price) => sum + price, 0);
+      const netParts = splitByWeights(weights, Math.max(0, subtotal - usePosStore.getState().discount));
       const tipParts = customTipPerLine ?? splitByWeights(weights, tip);
       let svcParts;
       if (method === 'card') {
@@ -716,6 +719,7 @@ export default function NewTicketScreen() {
           serviceId: Number(svcId),
           amount,
           serviceAmount: Math.round(Number(line.price) * (line.qty || 1) * 100) / 100,
+          serviceAmountNet: netParts[i],
           tips: Math.round(tips * 100) / 100,
           paymentMethod: method === 'card' ? 'card' : 'cash',
           date,
@@ -747,8 +751,25 @@ export default function NewTicketScreen() {
   );
 
   const persistPayloadsToApi = useCallback(async (payloads, helcimOnFirstRow) => {
+    // Keep the ID on the payload: receipt flows can clear POS state before saving.
+    // Cleanup retries must never re-submit an already-paid transaction.
+    const localTicketId = payloads[0]?.localTicketId;
+    const removeSavedCopy = async () => {
+      if (!localTicketId) return;
+      try {
+        await useLocalTicketStore.getState().remove(localTicketId);
+      } catch {
+        Alert.alert(
+          'Đã hoàn tất thanh toán',
+          'Chưa xoá được bản Save trên thiết bị. Check Turn có thể đếm trùng. Thử xoá lại bản Save, không thanh toán lại.',
+          [{ text: 'Thử lại', onPress: removeSavedCopy }]
+        );
+      }
+    };
     const allApi = payloads.length > 0 && payloads.every((p) => p.canApi);
     if (!allApi) {
+      await removeSavedCopy();
+      usePosStore.getState().bumpHomeRefresh();
       Alert.alert(
         'Hoàn tất cục bộ',
         'Một số dòng dùng nhân viên/dịch vụ offline — không gửi đủ lên server.'
@@ -765,21 +786,6 @@ export default function NewTicketScreen() {
         }
         await api.post('/api/transactions', body);
       }
-      // Keep the ID on the payload: receipt flows can clear POS state before saving.
-      // Cleanup retries must never re-submit an already-paid transaction.
-      const localTicketId = payloads[0]?.localTicketId;
-      const removeSavedCopy = async () => {
-        if (!localTicketId) return;
-        try {
-          await useLocalTicketStore.getState().remove(localTicketId);
-        } catch {
-          Alert.alert(
-            'Đã lưu giao dịch',
-            'Chưa xoá được bản Save trên thiết bị. Check Turn có thể đếm trùng. Thử xoá lại bản Save, không thanh toán lại.',
-            [{ text: 'Thử lại', onPress: removeSavedCopy }]
-          );
-        }
-      };
       await removeSavedCopy();
       usePosStore.getState().bumpHomeRefresh();
       return true;

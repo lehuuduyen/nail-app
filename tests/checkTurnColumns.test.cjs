@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const formatEmployeeNameFromDb = new Function(read('utils/staffDisplay.js').replace(/^import .*;\n/gm, '').replaceAll('export ', '') + ';return formatEmployeeNameFromDb;')();
-const build = new Function('formatEmployeeNameFromDb', read('utils/checkTurnColumns.js').replace(/^import .*;\n/gm, '').replaceAll('export ', '') + ';return buildCheckTurnColumns;')(formatEmployeeNameFromDb);
+const splitByWeights = new Function(read('utils/splitTicketPayment.js').replaceAll('export ', '') + ';return splitByWeights;')();
+const build = new Function('splitByWeights', 'formatEmployeeNameFromDb', read('utils/checkTurnColumns.js').replace(/^import .*;\n/gm, '').replaceAll('export ', '') + ';return buildCheckTurnColumns;')(splitByWeights, formatEmployeeNameFromDb);
 const dayYmd = '2026-10-06';
 const employees = [{ id: 1, firstName: 'Man', nickname: 'MAN' }, { id: 'local-2', displayName: 'Mai' }];
 const saved = (lines, extras = {}) => ({ id: 'ticket', day: dayYmd, createdAt: '2026-10-06T17:00:00Z', snapshot: { staffId: 1, staffName: 'Man', lines, ...extras } });
@@ -106,14 +107,14 @@ test('failed server save retains local copy; storage retry never repeats transac
   diskFails = false;
   await retry(); assert.equal(posts, 2); assert.equal(removes, 2);
   assert.equal(await persist([{ canApi: false, body: {}, localTicketId: 'ticket' }]), true);
-  assert.equal(removes, 2); // No server copy exists for local-only checkout.
+  assert.equal(removes, 3); // Local completion also closes the Save copy.
 });
 
 test('periodic refresh updates Check Turn independently of rotation and handles offline', async () => {
   const source = read('components/PublicHomeScreen.jsx').split('const refreshTurnsOnly = useCallback(')[1].split('\n  }, []);')[0] + '\n  }';
   let failRotation = true; let failColumns = false; let columns; let rotation;
-  const refresh = new Function('getSalonDateYmd', 'fetchTurnsForDate', 'fetchCheckTurnColumns', 'setCheckTurnSnapshot', 'setTurnSnapshot', `return (${source});`)(
-    () => dayYmd,
+  const refresh = new Function('phoenixDay', 'getSalonDateYmd', 'fetchTurnsForDate', 'fetchCheckTurnColumns', 'setCheckTurnSnapshot', 'setTurnSnapshot', `return (${source});`)(
+    () => dayYmd, () => '2026-10-07',
     async () => { if (failRotation) throw Error('offline'); return { employees: [], suggested: 7, total: 4 }; },
     async (date) => { assert.equal(date, dayYmd); if (failColumns) throw Error('offline'); return { columns: [] }; },
     (value) => { columns = value; }, (value) => { rotation = value; }
@@ -121,4 +122,32 @@ test('periodic refresh updates Check Turn independently of rotation and handles 
   await refresh(); assert.deepEqual(columns, { columns: [] }); assert.equal(rotation, undefined);
   failRotation = false; failColumns = true;
   await refresh(); assert.equal(columns, null); assert.equal(rotation.suggested, 7); assert.equal(rotation.rotationTotal, 4);
+});
+
+test('turn threshold uses discounted service money while gross display stays unchanged', () => {
+  for (const [discount, turns] of [[5.01, 0], [5, 1], [4.99, 1], [10, 0], [40, 0]]) {
+    const [col] = run([saved([{ price: 30 }], { discount, tip: 100, taxEnabled: true, taxRate: 0.1 })]);
+    assert.equal(col.totalAmount, 30);
+    assert.equal(col.totalTurns, turns);
+  }
+  const columns = run([saved([{ price: 30 }, { price: 60, employeeId: 'local-2' }], { discount: 30 })]);
+  assert.deepEqual(columns.map((c) => c.totalAmount), [30, 60]);
+  assert.deepEqual(columns.map((c) => c.totalTurns), [0, 1]);
+});
+
+test('checkout sends the same discounted basis as Save without changing payment allocation', () => {
+  const source = read('app/(pos)/new-ticket.jsx').split('const buildLinePayloads = useCallback(')[1].split('\n    [lines, staffId,')[0].trim().replace(/,$/, '');
+  const lines = [{ price: 30, name: 'A', serviceId: 1 }, { price: 60, name: 'B', serviceId: 2 }];
+  const state = { tip: 12.34, discount: 30, localTicketId: 'saved' };
+  const make = new Function('usePosStore', 'getCardFeeBase', 'lines', 'splitByWeights', 'staffId', 'fallbackServiceId', 'turnType', 'linkedAppointmentId', 'selectedCustomer', 'isApiNumericId', `return (${source});`)(
+    { getState: () => state }, () => 69, lines, splitByWeights, 1, 1, 'appointment', null, null, Number.isFinite
+  );
+  for (const method of ['cash', 'card']) {
+    const bodies = make(method, dayYmd).map((p) => p.body);
+    assert.deepEqual(bodies.map((b) => b.serviceAmount), [30, 60]);
+    assert.deepEqual(bodies.map((b) => b.serviceAmountNet), [20, 40]);
+    assert.deepEqual(bodies.map((b) => b.tips), [4.11, 8.23]);
+    assert.deepEqual(bodies.map((b) => b.amount), method === 'cash' ? [27.11, 54.23] : [27.8, 55.61]);
+    assert.equal(run([saved(lines, state)])[0].totalTurns, bodies.filter((b) => b.serviceAmountNet >= 25).length);
+  }
 });

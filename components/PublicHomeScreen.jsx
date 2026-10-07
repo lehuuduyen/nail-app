@@ -100,7 +100,7 @@ export default function PublicHomeScreen() {
           params: { limit: 200, date: salonYmd },
         }),
         fetchTurnsForDate(salonYmd).catch(() => null),
-        fetchCheckTurnColumns(salonYmd).catch(() => null),
+        fetchCheckTurnColumns(phoenixDay()).catch(() => null),
       ]);
       setCheckTurnSnapshot(checkTurnRes);
       const list = emps;
@@ -144,7 +144,7 @@ export default function PublicHomeScreen() {
     try {
       const [data, checkTurnRes] = await Promise.all([
         fetchTurnsForDate(salonYmd).catch(() => null),
-        fetchCheckTurnColumns(salonYmd).catch(() => null),
+        fetchCheckTurnColumns(phoenixDay()).catch(() => null),
       ]);
       setCheckTurnSnapshot(checkTurnRes);
       if (!data) return;
@@ -321,7 +321,7 @@ export default function PublicHomeScreen() {
         visible={checkTurnOpen}
         onClose={() => setCheckTurnOpen(false)}
         columns={checkTurnColumns}
-        dateLabel={receiptsDaySubtext}
+        dateLabel={`${localDay} · America/Phoenix`}
       />
 
       <OwnerPinModal
