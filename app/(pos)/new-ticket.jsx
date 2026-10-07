@@ -715,6 +715,7 @@ export default function NewTicketScreen() {
           employeeId: Number(eid),
           serviceId: Number(svcId),
           amount,
+          serviceAmount: Math.round(Number(line.price) * (line.qty || 1) * 100) / 100,
           tips: Math.round(tips * 100) / 100,
           paymentMethod: method === 'card' ? 'card' : 'cash',
           date,

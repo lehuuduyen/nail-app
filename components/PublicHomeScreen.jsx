@@ -4,7 +4,7 @@ import { Alert, AppState, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../api/client';
 import { fetchCatalogEmployees, fetchSalonDisplayName } from '../api/catalog';
-import { fetchTurnsForDate } from '../api/turns';
+import { fetchCheckTurnColumns, fetchTurnsForDate } from '../api/turns';
 import CheckTurnModal from './CheckTurnModal';
 import CustomerReceipts from './CustomerReceipts';
 import LeftSidebar from './LeftSidebar';
@@ -28,6 +28,8 @@ import { transactionsToReceiptRows } from '../utils/receiptsFromTransactions';
 
 import { useLocalTicketStore } from '../store/localTicketStore';
 import { phoenixDay, nextPhoenixMidnight, ticketStaffNames } from '../utils/localTickets';
+
+import { buildCheckTurnColumns } from '../utils/checkTurnColumns';
 
 const PAGE_BG = '#f0f0f0';
 const RIGHT_COL_W = 280;
@@ -68,6 +70,7 @@ export default function PublicHomeScreen() {
     date: '',
     rotationTotal: 0,
   });
+  const [checkTurnSnapshot, setCheckTurnSnapshot] = useState(null);
   const [checkTurnOpen, setCheckTurnOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -91,13 +94,15 @@ export default function PublicHomeScreen() {
       );
 
     try {
-      const [emps, txRes, turnRes] = await Promise.all([
+      const [emps, txRes, turnRes, checkTurnRes] = await Promise.all([
         fetchCatalogEmployees(),
         api.get('/api/transactions', {
           params: { limit: 200, date: salonYmd },
         }),
         fetchTurnsForDate(salonYmd).catch(() => null),
+        fetchCheckTurnColumns(salonYmd).catch(() => null),
       ]);
+      setCheckTurnSnapshot(checkTurnRes);
       const list = emps;
       if (list.length) {
         const main = list.map((e, i) => mapApiEmployeeToPosStaff(e, i));
@@ -115,6 +120,7 @@ export default function PublicHomeScreen() {
         });
       }
     } catch {
+      setCheckTurnSnapshot(null);
       setStaff([...SAMPLE_STAFF, ...mapLocal(localExtras, SAMPLE_STAFF.length)]);
       setTransactions([]);
     }
@@ -198,6 +204,13 @@ export default function PublicHomeScreen() {
         (r.serviceBy || '').replace(/^Service By:\s*/, '').split('+').map((n) => n.trim()).filter(Boolean).join(' + ') };
     }),
   ], [localTickets, localDay, unpaidReceipts, transactions]);
+  const checkTurnColumns = useMemo(() => buildCheckTurnColumns({
+    apiColumns: checkTurnSnapshot?.date === localDay ? checkTurnSnapshot.columns : [],
+    savedTickets: localTickets,
+    employees: staff,
+    dayYmd: localDay,
+  }), [checkTurnSnapshot, localTickets, staff, localDay]);
+
   const openLocalReceipt = (receipt) => {
     useLocalTicketStore.getState().requestOpen(receipt.id);
     router.push('/(pos)/new-ticket');
@@ -302,8 +315,7 @@ export default function PublicHomeScreen() {
       <CheckTurnModal
         visible={checkTurnOpen}
         onClose={() => setCheckTurnOpen(false)}
-        turnData={turnSnapshot.employees}
-        suggested={turnSnapshot.suggested}
+        columns={checkTurnColumns}
         dateLabel={receiptsDaySubtext}
       />
 
