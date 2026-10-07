@@ -1,4 +1,3 @@
-import { splitByWeights } from './splitTicketPayment';
 import { formatEmployeeNameFromDb } from './staffDisplay';
 
 const numeric = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -20,7 +19,7 @@ function makeRow(row, isSaved, key) {
   };
 }
 
-/** Display gross service money; count turns on prorated post-discount service money. */
+/** Display gross service money; count turns on gross service money, ignoring ticket adjustments. */
 export function buildCheckTurnColumns({ apiColumns = [], savedTickets = [], employees = [], dayYmd } = {}) {
   const staff = Array.isArray(employees) ? employees : [];
   const byId = new Map();
@@ -28,7 +27,7 @@ export function buildCheckTurnColumns({ apiColumns = [], savedTickets = [], empl
     const key = String(id);
     if (!byId.has(key)) {
       const employee = staff.find((e) => String(e.id) === key);
-      byId.set(key, { ...source, ...employee, employeeId: id, rows: [] });
+      byId.set(key, { ...employee, ...source, nickname: source.nickname || employee?.nickname, employeeId: id, rows: [] });
     }
     return byId.get(key);
   };
@@ -42,10 +41,7 @@ export function buildCheckTurnColumns({ apiColumns = [], savedTickets = [], empl
     const snapshot = ticket.snapshot || {};
     const groups = new Map();
     const lines = snapshot.lines || [];
-    const weights = lines.map((line) => numeric(line.price) * (line.qty || 1));
-    const subtotal = weights.reduce((sum, price) => sum + price, 0);
-    const netParts = splitByWeights(weights, Math.max(0, subtotal - numeric(snapshot.discount)));
-    for (const [index, line] of lines.entries()) {
+    for (const line of lines) {
       const id = line.employeeId ?? snapshot.staffId;
       const key = String(id);
       if (!groups.has(key)) groups.set(key, {
@@ -55,7 +51,7 @@ export function buildCheckTurnColumns({ apiColumns = [], savedTickets = [], empl
       const group = groups.get(key);
       const price = numeric(line.price) * (line.qty || 1);
       group.amount += price;
-      if (netParts[index] >= 25) group.turns += 1;
+      if (price >= 25) group.turns += 1;
       group.services.push({ name: line.name, price: round(price) });
     }
     for (const group of groups.values()) {

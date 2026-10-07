@@ -71,6 +71,7 @@ export default function PublicHomeScreen() {
     rotationTotal: 0,
   });
   const [checkTurnSnapshot, setCheckTurnSnapshot] = useState(null);
+  const [checkTurnUnavailable, setCheckTurnUnavailable] = useState(false);
   const [checkTurnOpen, setCheckTurnOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -100,9 +101,10 @@ export default function PublicHomeScreen() {
           params: { limit: 200, date: salonYmd },
         }),
         fetchTurnsForDate(salonYmd).catch(() => null),
-        fetchCheckTurnColumns(phoenixDay()).catch(() => null),
+        fetchCheckTurnColumns(salonYmd).catch(() => null),
       ]);
-      setCheckTurnSnapshot(checkTurnRes);
+      if (checkTurnRes) setCheckTurnSnapshot(checkTurnRes);
+      setCheckTurnUnavailable(!checkTurnRes);
       const list = emps;
       if (list.length) {
         const main = list.map((e, i) => mapApiEmployeeToPosStaff(e, i));
@@ -120,7 +122,7 @@ export default function PublicHomeScreen() {
         });
       }
     } catch {
-      setCheckTurnSnapshot(null);
+      setCheckTurnUnavailable(true);
       setStaff([...SAMPLE_STAFF, ...mapLocal(localExtras, SAMPLE_STAFF.length)]);
       setTransactions([]);
     }
@@ -144,9 +146,10 @@ export default function PublicHomeScreen() {
     try {
       const [data, checkTurnRes] = await Promise.all([
         fetchTurnsForDate(salonYmd).catch(() => null),
-        fetchCheckTurnColumns(phoenixDay()).catch(() => null),
+        fetchCheckTurnColumns(salonYmd).catch(() => null),
       ]);
-      setCheckTurnSnapshot(checkTurnRes);
+      if (checkTurnRes) setCheckTurnSnapshot(checkTurnRes);
+      setCheckTurnUnavailable(!checkTurnRes);
       if (!data) return;
       setTurnSnapshot({
         employees: data.employees || [],
@@ -210,11 +213,11 @@ export default function PublicHomeScreen() {
     }),
   ], [localTickets, localDay, unpaidReceipts, transactions]);
   const checkTurnColumns = useMemo(() => buildCheckTurnColumns({
-    apiColumns: checkTurnSnapshot?.date === localDay ? checkTurnSnapshot.columns : [],
+    apiColumns: checkTurnSnapshot?.date === salonYmd ? checkTurnSnapshot.columns : [],
     savedTickets: localTickets,
     employees: staff,
-    dayYmd: localDay,
-  }), [checkTurnSnapshot, localTickets, staff, localDay]);
+    dayYmd: salonYmd,
+  }), [checkTurnSnapshot, localTickets, staff, salonYmd]);
 
   const openLocalReceipt = (receipt) => {
     useLocalTicketStore.getState().requestOpen(receipt.id);
@@ -321,7 +324,7 @@ export default function PublicHomeScreen() {
         visible={checkTurnOpen}
         onClose={() => setCheckTurnOpen(false)}
         columns={checkTurnColumns}
-        dateLabel={`${localDay} · America/Phoenix`}
+        unavailable={checkTurnUnavailable}
       />
 
       <OwnerPinModal

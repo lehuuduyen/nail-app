@@ -15,6 +15,7 @@ export default function CheckTurnModal({
   onClose,
   columns,
   dateLabel,
+  unavailable = false,
 }) {
   const [details, setDetails] = useState(null);
   useEffect(() => { setDetails(null); }, [visible]);
@@ -37,6 +38,7 @@ export default function CheckTurnModal({
               `Hôm nay (${getSalonTzDisplayLabel()}) · ${formatSalonTodayReadable()}`}
           </Text>
 
+          {unavailable ? <Text style={styles.empty}>Không tải được dữ liệu server. Tổng bên dưới có thể chưa đầy đủ hoặc chưa cập nhật.</Text> : null}
           <View style={styles.legend}>
             <View style={styles.legendItem}>
               <View style={[styles.dot, { backgroundColor: '#D32F2F' }]} />
@@ -76,14 +78,10 @@ export default function CheckTurnModal({
                     {column.rows.map((row) => (
                       <Pressable
                         key={row.key}
-                        disabled={!row.hasDetails}
-                        accessibilityRole={row.hasDetails ? 'button' : undefined}
-                        accessibilityLabel={`${row.label}${row.isSaved ? ', Save' : ''}${row.hasDetails ? ', chi tiết' : ''}`}
-                        onPress={() => setDetails(row.details)}
                         style={[styles.row, row.isSaved && styles.savedRow]}
                       >
                         <Text style={[styles.rowLabel, row.isSaved && styles.savedText]}>{row.label}</Text>
-                        {row.hasDetails ? <View style={styles.infoBadge}><Text style={styles.infoText}>i</Text></View> : null}
+                        {row.hasDetails ? <Pressable accessibilityRole="button" accessibilityLabel={`Chi tiết ${row.label}`} hitSlop={8} onPress={() => setDetails(row.details)} style={styles.infoBadge}><Text style={styles.infoText}>i</Text></Pressable> : null}
                       </Pressable>
                     ))}
                   </ScrollView>
