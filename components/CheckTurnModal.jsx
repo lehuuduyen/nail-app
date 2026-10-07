@@ -79,6 +79,8 @@ export default function CheckTurnModal({
                       <Pressable
                         key={row.key}
                         style={[styles.row, row.isSaved && styles.savedRow]}
+                        accessibilityRole={row.hasDetails ? "button" : undefined}
+                        onPress={row.hasDetails ? () => setDetails(row.details) : undefined}
                       >
                         <Text style={[styles.rowLabel, row.isSaved && styles.savedText]}>{row.label}</Text>
                         {row.hasDetails ? <Pressable accessibilityRole="button" accessibilityLabel={`Chi tiết ${row.label}`} hitSlop={8} onPress={() => setDetails(row.details)} style={styles.infoBadge}><Text style={styles.infoText}>i</Text></Pressable> : null}
@@ -154,7 +156,7 @@ const styles = StyleSheet.create({
   column: { width: 180, borderWidth: 1, borderColor: '#eee', borderRadius: 8, paddingTop: 12, overflow: 'hidden' },
   empName: { fontSize: 14, fontWeight: '700', color: '#333', paddingHorizontal: 12 },
   amount: { fontSize: 16, fontWeight: '600', color: '#333', padding: 12 },
-  ticketList: { maxHeight: 300 },
+  ticketList: { height: 300 },
   rowLabel: { flex: 1, fontSize: 14, color: '#333' },
   rowText: { fontSize: 14, color: '#333' },
   savedText: { color: '#D32F2F', fontWeight: '700' },

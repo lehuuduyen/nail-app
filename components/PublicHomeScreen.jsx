@@ -217,8 +217,8 @@ export default function PublicHomeScreen() {
     apiColumns: checkTurnSnapshot?.date === salonYmd ? checkTurnSnapshot.columns : [],
     savedTickets: localTickets,
     employees: staff,
-    dayYmd: salonYmd,
-  }), [checkTurnSnapshot, localTickets, staff, salonYmd]);
+    dayYmd: localDay,
+  }), [checkTurnSnapshot, localTickets, staff, salonYmd, localDay]);
 
   const openLocalReceipt = (receipt) => {
     useLocalTicketStore.getState().requestOpen(receipt.id);
@@ -318,6 +318,7 @@ export default function PublicHomeScreen() {
             router.push('/(pos)/new-ticket');
           }}
           onCheckTurns={() => {
+            refreshLocalTickets();
             setCheckTurnOpen(true);
             refreshTurnsOnly();
           }}

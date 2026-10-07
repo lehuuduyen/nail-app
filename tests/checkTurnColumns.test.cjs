@@ -11,11 +11,11 @@ const employees = [{ id: 1, firstName: 'Man', nickname: 'MAN' }, { id: 'local-2'
 const saved = (lines, extras = {}) => ({ id: 'ticket', day: dayYmd, createdAt: '2026-10-06T17:00:00Z', snapshot: { staffId: 1, staffName: 'Man', lines, ...extras } });
 const run = (tickets, apiColumns = []) => build({ savedTickets: tickets, apiColumns, employees, dayYmd });
 
-test('gross service money excludes all ticket adjustments; two services form one 200 (2t) Save row', () => {
+test('gross service money excludes all ticket adjustments; two services form separate Save rows totaling 200 and 2 turns', () => {
   const [col] = run([saved([{ name: 'A', price: 100 }, { name: 'B', price: 100 }], { tip: 50, discount: 100, taxEnabled: true, taxRate: 0.1 })]);
   assert.equal(col.totalAmount, 200); assert.equal(col.totalTurns, 2);
-  assert.equal(col.name, 'MAN (2)'); assert.equal(col.rows.length, 1);
-  assert.equal(col.rows[0].label, '200 (2t)');
+  assert.equal(col.name, 'MAN (2)'); assert.equal(col.rows.length, 2);
+  assert.deepEqual(col.rows.map((row) => row.label), ['100 (1t)', '100 (1t)']);
   assert.equal(col.hasSaved, true); assert.equal(col.rows[0].isSaved, true);
   assert.equal(col.rows[0].details.isSaved, true);
 });
@@ -43,7 +43,8 @@ test('multi-technician Save uses line assignment with snapshot fallback; string 
   const columns = run([ticket], [{ employeeId: 'local-2', rows: [] }, { employeeId: '1', rows: [] }]);
   assert.deepEqual(columns.map((c) => c.name), ['MAN (1)', 'MAI (1)']);
   assert.deepEqual(columns.map((c) => c.totalAmount), [70, 100]);
-  assert.ok(columns.every((c) => c.hasSaved && c.rows.length === 1 && c.rows[0].isSaved));
+  assert.deepEqual(columns.map((c) => c.rows.length), [2, 1]);
+  assert.ok(columns.every((c) => c.hasSaved && c.rows.every((row) => row.isSaved)));
 });
 test('details require known service or customer; missing names and empty customer do not show badge', () => {
   for (const name of [undefined, '', '—']) assert.equal(run([saved([{ price: 10, name }])])[0].rows[0].hasDetails, false);
@@ -144,4 +145,57 @@ test('load preserves fresh Check Turn data when receipts fail', async () => {
   await load();
   assert.equal(columns, response);
   assert.equal(unavailable, false);
+});
+
+
+test('API ticket services become individual gross-price rows with customer details', () => {
+  const [column] = run([], [{ employeeId: 1, rows: [{
+    ticketId: 'paid', serviceTotal: 220, turns: 2, time: '2026-10-06T18:00:00Z',
+    customer: { name: 'Test' },
+    services: [{ name: 'A', price: 100 }, { name: 'B', price: 100 }, { name: 'Add-on', price: 20 }],
+  }] }]);
+  assert.deepEqual(column.rows.map((row) => row.label), ['100 (1t)', '100 (1t)', '20']);
+  assert.equal(column.totalAmount, 220);
+  assert.equal(column.totalTurns, 2);
+  assert.equal(new Set(column.rows.map((row) => row.key)).size, 3);
+  assert.ok(column.rows.every((row) => row.hasDetails && !row.isSaved && row.details.services.length === 1));
+});
+
+test('home uses the local storage day for Save tickets even when salon day differs', () => {
+  const source = read('components/PublicHomeScreen.jsx').split('const checkTurnColumns = useMemo(() => ')[1].split('), [checkTurnSnapshot')[0] + ')';
+  const columns = new Function('buildCheckTurnColumns', 'checkTurnSnapshot', 'salonYmd', 'localTickets', 'staff', 'localDay', `return ${source};`)(
+    build, null, '2026-10-07', [saved([{ price: 100 }])], employees, dayYmd
+  );
+  assert.equal(columns[0].totalAmount, 100);
+  assert.equal(columns[0].hasSaved, true);
+});
+
+
+test('durable Save publishes rows offline, and closing removes red rows without changing paid totals', async () => {
+  const helpers = new Function(read('utils/localTickets.js').replaceAll('export ', '') + ';return { cloneTicket, LOCAL_TICKET_KEY, parseTickets, phoenixDay };')();
+  const createStore = (init) => {
+    let state;
+    const store = { getState: () => state };
+    state = init((patch) => { state = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) }; }, store.getState);
+    return store;
+  };
+  const source = read('store/localTicketStore.js').replace(/^import .*;\n/gm, '').split('export const useLocalTicketStore')[0].replaceAll('export ', '');
+  const createLocalTicketStore = new Function(...Object.keys(helpers), source + ';return createLocalTicketStore;')(...Object.values(helpers));
+  let persisted = null;
+  const store = createLocalTicketStore({ getItem: async () => persisted, setItem: async (_, value) => { persisted = value; } }, createStore);
+  const snapshot = { staffId: 1, staffName: 'Man', lines: [{ id: 'a', name: 'A', price: 100 }, { id: 'b', name: 'B', price: 100 }],
+    tip: 50, discount: 30, taxEnabled: true, taxRate: 0.1, customLabel: '', selectedCustomer: null, turnType: 'customer_pick', linkedAppointmentId: null };
+  await store.getState().save('save-test', snapshot, 237);
+  const day = store.getState().tickets[0].day;
+  const getColumns = (apiColumns = []) => build({ savedTickets: store.getState().tickets, apiColumns, employees, dayYmd: day });
+  const [savedColumn] = getColumns();
+  assert.equal(savedColumn.totalAmount, 200);
+  assert.equal(savedColumn.totalTurns, 2);
+  assert.ok(savedColumn.hasSaved && savedColumn.rows.every((row) => row.isSaved));
+  await store.getState().remove('save-test');
+  const [paidColumn] = getColumns([{ employeeId: 1, rows: [{ ticketId: 'save-test', services: snapshot.lines }] }]);
+  assert.equal(paidColumn.totalAmount, savedColumn.totalAmount);
+  assert.equal(paidColumn.totalTurns, savedColumn.totalTurns);
+  assert.equal(paidColumn.hasSaved, false);
+  assert.ok(paidColumn.rows.every((row) => !row.isSaved));
 });
