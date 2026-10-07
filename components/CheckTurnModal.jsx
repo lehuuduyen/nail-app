@@ -112,7 +112,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderRadius: 16,
     overflow: 'hidden',
-    maxHeight: '85%',
+    height: '85%',
+    maxHeight: 600,
   },
   header: {
     backgroundColor: '#1a1a2e',
@@ -142,7 +143,7 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   dot: { width: 10, height: 10, borderRadius: 5 },
   legendText: { fontSize: 10, color: '#666' },
-  list: { maxHeight: 420 },
+  list: { flex: 1, minHeight: 0 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -156,7 +157,7 @@ const styles = StyleSheet.create({
   column: { width: 180, borderWidth: 1, borderColor: '#eee', borderRadius: 8, paddingTop: 12, overflow: 'hidden' },
   empName: { fontSize: 14, fontWeight: '700', color: '#333', paddingHorizontal: 12 },
   amount: { fontSize: 16, fontWeight: '600', color: '#333', padding: 12 },
-  ticketList: { height: 300 },
+  ticketList: { flex: 1, minHeight: 0 },
   rowLabel: { flex: 1, fontSize: 14, color: '#333' },
   rowText: { fontSize: 14, color: '#333' },
   savedText: { color: '#D32F2F', fontWeight: '700' },

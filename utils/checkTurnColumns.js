@@ -31,38 +31,43 @@ export function buildCheckTurnColumns({ apiColumns = [], savedTickets = [], empl
     }
     return byId.get(key);
   };
+  // Keep the roster visible even before the endpoint responds or while offline.
+  staff.forEach((employee) => ensureColumn(employee.id, employee));
   for (const column of Array.isArray(apiColumns) ? apiColumns : []) {
     const target = ensureColumn(column.employeeId, column);
+    // Prefer server identity when the roster has no nickname.
+    target.nickname = target.nickname || column.nickname;
+    target.displayName = target.displayName || column.displayName || column.name;
     for (const [i, row] of (column.rows || []).entries()) {
-      const key = `api:${column.employeeId}:${row.ticketId ?? i}:${i}`;
-      // The endpoint groups services by ticket; display each service separately.
-      if (Array.isArray(row.services) && row.services.length) {
-        row.services.forEach((service, index) => {
-          const amount = numeric(service.price);
-          target.rows.push(makeRow({
-            ...row, serviceTotal: amount, turns: amount >= 25 ? 1 : 0,
-            services: [service],
-          }, false, `${key}:${index}`));
-        });
-      } else {
-        // Older records without line details retain their service-only API total.
-        target.rows.push(makeRow(row, false, key));
-      }
+      const services = Array.isArray(row.services) ? row.services : [];
+      target.rows.push(makeRow(services.length ? {
+        ...row,
+        serviceTotal: services.reduce((sum, service) => sum + numeric(service.price), 0),
+        turns: services.filter((service) => numeric(service.price) >= 25).length,
+      } : row, false, `api:${column.employeeId}:${row.ticketId ?? i}:${i}`));
     }
   }
   for (const ticket of Array.isArray(savedTickets) ? savedTickets : []) {
     if (ticket.day !== dayYmd) continue;
     const snapshot = ticket.snapshot || {};
-    const lines = snapshot.lines || [];
-    lines.forEach((line, index) => {
+    const grouped = new Map();
+    for (const line of snapshot.lines || []) {
       const id = line.employeeId ?? snapshot.staffId;
+      const key = String(id);
       const amount = numeric(line.price) * (line.qty || 1);
-      ensureColumn(id, { displayName: line.employeeName ?? snapshot.staffName }).rows.push(makeRow({
-        amount, turns: amount >= 25 ? 1 : 0,
-        services: [{ name: line.name, price: round(amount) }],
+      const column = ensureColumn(id, { displayName: line.employeeName ?? snapshot.staffName });
+      if (!grouped.has(key)) grouped.set(key, { column, amount: 0, turns: 0, services: [] });
+      const row = grouped.get(key);
+      row.amount += amount;
+      row.turns += amount >= 25 ? 1 : 0;
+      row.services.push({ name: line.name, price: round(amount) });
+    }
+    for (const [id, row] of grouped) {
+      row.column.rows.push(makeRow({
+        amount: row.amount, turns: row.turns, services: row.services,
         customer: snapshot.selectedCustomer, time: ticket.createdAt,
-      }, true, `saved:${ticket.id}:${id}:${index}`));
-    });
+      }, true, `saved:${ticket.id}:${id}`));
+    }
   }
   const order = new Map(staff.map((e, index) => [String(e.id), index]));
   return [...byId.values()].map((column) => {

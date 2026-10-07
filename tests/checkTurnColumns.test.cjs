@@ -11,11 +11,11 @@ const employees = [{ id: 1, firstName: 'Man', nickname: 'MAN' }, { id: 'local-2'
 const saved = (lines, extras = {}) => ({ id: 'ticket', day: dayYmd, createdAt: '2026-10-06T17:00:00Z', snapshot: { staffId: 1, staffName: 'Man', lines, ...extras } });
 const run = (tickets, apiColumns = []) => build({ savedTickets: tickets, apiColumns, employees, dayYmd });
 
-test('gross service money excludes all ticket adjustments; two services form separate Save rows totaling 200 and 2 turns', () => {
+test('gross service money excludes all ticket adjustments; two services form one Save row totaling 200 and 2 turns', () => {
   const [col] = run([saved([{ name: 'A', price: 100 }, { name: 'B', price: 100 }], { tip: 50, discount: 100, taxEnabled: true, taxRate: 0.1 })]);
   assert.equal(col.totalAmount, 200); assert.equal(col.totalTurns, 2);
-  assert.equal(col.name, 'MAN (2)'); assert.equal(col.rows.length, 2);
-  assert.deepEqual(col.rows.map((row) => row.label), ['100 (1t)', '100 (1t)']);
+  assert.equal(col.name, 'MAN (2)'); assert.equal(col.rows.length, 1);
+  assert.deepEqual(col.rows.map((row) => row.label), ['200 (2t)']);
   assert.equal(col.hasSaved, true); assert.equal(col.rows[0].isSaved, true);
   assert.equal(col.rows[0].details.isSaved, true);
 });
@@ -43,7 +43,7 @@ test('multi-technician Save uses line assignment with snapshot fallback; string 
   const columns = run([ticket], [{ employeeId: 'local-2', rows: [] }, { employeeId: '1', rows: [] }]);
   assert.deepEqual(columns.map((c) => c.name), ['MAN (1)', 'MAI (1)']);
   assert.deepEqual(columns.map((c) => c.totalAmount), [70, 100]);
-  assert.deepEqual(columns.map((c) => c.rows.length), [2, 1]);
+  assert.deepEqual(columns.map((c) => c.rows.length), [1, 1]);
   assert.ok(columns.every((c) => c.hasSaved && c.rows.every((row) => row.isSaved)));
 });
 test('details require known service or customer; missing names and empty customer do not show badge', () => {
@@ -56,9 +56,9 @@ test('details require known service or customer; missing names and empty custome
 });
 test('offline, missing inputs, previous-day tickets and removal', () => {
   assert.deepEqual(build(), []);
-  assert.deepEqual(run([{ ...saved([{ price: 25 }]), day: '2026-10-05' }]), []);
+  assert.ok(run([{ ...saved([{ price: 25 }]), day: '2026-10-05' }]).every((c) => c.rows.length === 0));
   assert.equal(build({ apiColumns: null, savedTickets: [saved([{ price: 25 }])], employees, dayYmd })[0].totalAmount, 25);
-  assert.deepEqual(run([]), []);
+  assert.deepEqual(run([]).map((c) => c.name), ['MAN (0)', 'MAI (0)']);
 });
 test('API helper uses shared client and passes the salon day', async () => {
   const calls = [];
@@ -148,17 +148,17 @@ test('load preserves fresh Check Turn data when receipts fail', async () => {
 });
 
 
-test('API ticket services become individual gross-price rows with customer details', () => {
+test('API ticket services remain one gross-price row with customer details', () => {
   const [column] = run([], [{ employeeId: 1, rows: [{
     ticketId: 'paid', serviceTotal: 220, turns: 2, time: '2026-10-06T18:00:00Z',
     customer: { name: 'Test' },
     services: [{ name: 'A', price: 100 }, { name: 'B', price: 100 }, { name: 'Add-on', price: 20 }],
   }] }]);
-  assert.deepEqual(column.rows.map((row) => row.label), ['100 (1t)', '100 (1t)', '20']);
+  assert.deepEqual(column.rows.map((row) => row.label), ['220 (2t)']);
   assert.equal(column.totalAmount, 220);
   assert.equal(column.totalTurns, 2);
-  assert.equal(new Set(column.rows.map((row) => row.key)).size, 3);
-  assert.ok(column.rows.every((row) => row.hasDetails && !row.isSaved && row.details.services.length === 1));
+  assert.equal(new Set(column.rows.map((row) => row.key)).size, 1);
+  assert.ok(column.rows.every((row) => row.hasDetails && !row.isSaved && row.details.services.length === 3));
 });
 
 test('home uses the local storage day for Save tickets even when salon day differs', () => {
