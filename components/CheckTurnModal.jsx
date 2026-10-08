@@ -53,6 +53,9 @@ export default function CheckTurnModal({
                 <Text style={styles.back}>‹ Quay lại</Text>
               </Pressable>
               <Text style={styles.empName}>Chi tiết {details.isSaved ? '· Save' : ''}</Text>
+              {details.services.length === 0 && !details.customer ? (
+                <Text style={styles.empty}>Chưa có thông tin dịch vụ hoặc khách hàng.</Text>
+              ) : null}
               {details.services.map((service, index) => (
                 <View key={index} style={styles.row}>
                   <Text style={styles.rowLabel}>{service.name || '—'}</Text>

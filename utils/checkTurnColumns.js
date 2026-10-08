@@ -2,7 +2,6 @@ import { formatEmployeeNameFromDb } from './staffDisplay';
 
 const numeric = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 const round = (value) => Math.round((value + Number.EPSILON) * 100) / 100;
-const knownName = (name) => typeof name === 'string' && name.trim() && name.trim() !== '—';
 const timeValue = (time) => Date.parse(time) || 0;
 
 function makeRow(row, isSaved, key) {
@@ -10,11 +9,10 @@ function makeRow(row, isSaved, key) {
   const turns = numeric(row.turns);
   const services = Array.isArray(row.services) ? row.services.map((s) => ({ ...s })) : [];
   const customer = row.customer || null;
-  const hasCustomer = customer && (customer.id != null || customer.name || customer.firstName || customer.phone);
   return {
     key, amount, turns, isSaved,
     label: `${amount}${turns ? ` (${turns}t)` : ''}`,
-    hasDetails: Boolean(services.some((s) => knownName(s.name)) || hasCustomer),
+    hasDetails: true,
     details: { services, customer, time: row.time, isSaved },
   };
 }

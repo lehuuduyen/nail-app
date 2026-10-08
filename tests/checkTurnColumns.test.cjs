@@ -46,13 +46,13 @@ test('multi-technician Save uses line assignment with snapshot fallback; string 
   assert.deepEqual(columns.map((c) => c.rows.length), [1, 1]);
   assert.ok(columns.every((c) => c.hasSaved && c.rows.every((row) => row.isSaved)));
 });
-test('details require known service or customer; missing names and empty customer do not show badge', () => {
-  for (const name of [undefined, '', '—']) assert.equal(run([saved([{ price: 10, name }])])[0].rows[0].hasDetails, false);
+test('every ticket has an info badge, including missing service names and empty customer', () => {
+  for (const name of [undefined, '', '—']) assert.equal(run([saved([{ price: 10, name }])])[0].rows[0].hasDetails, true);
   assert.equal(run([saved([{ price: 10, name: 'Manicure' }])])[0].rows[0].hasDetails, true);
   const customer = { name: 'Test customer', phone: 'test-phone' };
   const row = run([saved([{ price: 10 }], { selectedCustomer: customer })])[0].rows[0];
   assert.equal(row.hasDetails, true); assert.deepEqual(row.details.customer, customer);
-  assert.equal(run([], [{ employeeId: 1, rows: [{ serviceTotal: 10, turns: 0, customer: { id: null, phone: null }, services: [{ name: '—', price: 10 }] }] }])[0].rows[0].hasDetails, false);
+  assert.equal(run([], [{ employeeId: 1, rows: [{ serviceTotal: 10, turns: 0, customer: { id: null, phone: null }, services: [{ name: '—', price: 10 }] }] }])[0].rows[0].hasDetails, true);
 });
 test('offline, missing inputs, previous-day tickets and removal', () => {
   assert.deepEqual(build(), []);
@@ -203,4 +203,40 @@ test('durable Save publishes rows offline, and closing removes red rows without 
   assert.equal(paidColumn.totalTurns, savedColumn.totalTurns);
   assert.equal(paidColumn.hasSaved, false);
   assert.ok(paidColumn.rows.every((row) => !row.isSaved));
+});
+
+test('successful persistence removes the original Save only after all lines, even after draft reset', async () => {
+  const source = read('app/(pos)/new-ticket.jsx').split('const persistPayloadsToApi = useCallback(')[1].split('\n  }, []);')[0] + '\n  }';
+  for (const failure of [null, 'api', 'storage']) {
+    const events = [];
+    let posts = 0;
+    const persist = new Function('api', 'useLocalTicketStore', 'usePosStore', 'Alert', `return (${source});`)(
+      { post: async () => { events.push('post'); if (++posts === 2 && failure === 'api') throw Error('offline'); } },
+      { getState: () => ({ remove: async (id) => { events.push(`remove:${id}`); if (failure === 'storage') throw Error('storage'); } }) },
+      { getState: () => ({ localTicketId: null, bumpHomeRefresh: () => events.push('refresh') }) },
+      { alert: (...args) => events.push(args[0]) }
+    );
+    const payloads = [1, 2].map((serviceId) => ({ canApi: true, localTicketId: 'original-save', body: { serviceId } }));
+    assert.equal(await persist(payloads, null), failure !== 'api');
+    if (failure === 'api') {
+      assert.deepEqual(events, ['post', 'post', 'Lỗi']);
+    } else {
+      assert.deepEqual(events, ['post', 'post', 'remove:original-save', ...(failure === 'storage' ? ['Đã thanh toán'] : []), 'refresh']);
+    }
+  }
+});
+
+test('new paid tickets do not create Save entries and local-only completion preserves unpersisted Save', async () => {
+  const source = read('app/(pos)/new-ticket.jsx').split('const persistPayloadsToApi = useCallback(')[1].split('\n  }, []);')[0] + '\n  }';
+  const events = [];
+  const persist = new Function('api', 'useLocalTicketStore', 'usePosStore', 'Alert', `return (${source});`)(
+    { post: async (_, body) => { assert.equal(Object.hasOwn(body, 'localTicketId'), false); events.push('post'); } },
+    { getState: () => { throw Error('must not save or remove'); } },
+    { getState: () => ({ bumpHomeRefresh: () => events.push('refresh') }) },
+    { alert: () => {} }
+  );
+  assert.equal(await persist([{ canApi: true, localTicketId: null, body: { serviceId: 1 } }], null), true);
+  assert.deepEqual(events, ['post', 'refresh']);
+  assert.equal(await persist([{ canApi: false, localTicketId: 'unpersisted', body: {} }], null), true);
+  assert.deepEqual(events, ['post', 'refresh']);
 });
