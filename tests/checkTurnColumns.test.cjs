@@ -123,28 +123,33 @@ test('checkout sends gross reporting basis without changing payment allocation',
 });
 
 
-test('load preserves fresh Check Turn data when receipts fail', async () => {
+test('receipt failure preserves the real roster, including staff with no services, and API rows', async () => {
   const source = read('components/PublicHomeScreen.jsx').split('const load = useCallback(')[1].split('\n  }, []);')[0] + '\n  }';
-  const response = { date: dayYmd, columns: [{ employeeId: 1, rows: [] }] };
-  let columns; let unavailable;
+  const response = { date: dayYmd, columns: [{ employeeId: 1, rows: [{ ticketId: 'paid', services: [{ name: 'A', price: 100 }, { name: 'B', price: 100 }] }] }] };
+  let columns; let unavailable; let roster;
   const values = {
     getSalonDateYmd: () => dayYmd,
     fetchSalonDisplayName: async () => null,
     loadSetting: async () => null, SETTING_KEYS: {}, setStoreTitle: () => {},
     useLocalCatalogStore: { getState: () => ({ employees: [] }) },
     mapApiEmployeeToPosStaff: (e) => e, SAMPLE_STAFF: [],
-    fetchCatalogEmployees: async () => [],
+    fetchCatalogEmployees: async () => employees,
     api: { get: async () => { throw Error('receipts unavailable'); } },
     fetchTurnsForDate: async () => null,
     fetchCheckTurnColumns: async () => response,
     setCheckTurnSnapshot: (value) => { columns = value; },
     setCheckTurnUnavailable: (value) => { unavailable = value; },
-    setStaff: () => {}, setTransactions: () => {}, setTurnSnapshot: () => {},
+    setStaff: (value) => { roster = value; }, setTransactions: () => {}, setTurnSnapshot: () => {},
   };
   const load = new Function(...Object.keys(values), `return (${source});`)(...Object.values(values));
   await load();
   assert.equal(columns, response);
   assert.equal(unavailable, false);
+  assert.deepEqual(roster, employees);
+  const result = build({ apiColumns: columns.columns, employees: roster });
+  assert.deepEqual(result.map((c) => c.name), ['MAN (2)', 'MAI (0)']);
+  assert.deepEqual(result[0].rows.map((row) => row.label), ['200 (2t)']);
+  assert.equal(result[1].rows.length, 0);
 });
 
 

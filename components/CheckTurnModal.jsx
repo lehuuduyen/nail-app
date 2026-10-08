@@ -18,6 +18,7 @@ export default function CheckTurnModal({
   unavailable = false,
 }) {
   const [details, setDetails] = useState(null);
+  const [columnsHeight, setColumnsHeight] = useState(0);
   useEffect(() => { setDetails(null); }, [visible]);
   const list = Array.isArray(columns) ? columns : [];
   const total = list.reduce((sum, column) => sum + column.totalTurns, 0);
@@ -68,28 +69,30 @@ export default function CheckTurnModal({
               ) : null}
             </ScrollView>
           ) : (
-            <ScrollView horizontal style={styles.list} contentContainerStyle={styles.columns}>
-              {list.length === 0 ? <Text style={styles.empty}>Chưa có dữ liệu turn hôm nay.</Text> : null}
-              {list.map((column) => (
-                <View key={String(column.employeeId)} style={styles.column}>
-                  <Text style={[styles.empName, column.hasSaved && styles.savedText]}>{column.name}</Text>
-                  <Text style={styles.amount}>{formatMoney(column.totalAmount)}</Text>
-                  <ScrollView nestedScrollEnabled style={styles.ticketList}>
-                    {column.rows.map((row) => (
-                      <Pressable
-                        key={row.key}
-                        style={[styles.row, row.isSaved && styles.savedRow]}
-                        accessibilityRole={row.hasDetails ? "button" : undefined}
-                        onPress={row.hasDetails ? () => setDetails(row.details) : undefined}
-                      >
-                        <Text style={[styles.rowLabel, row.isSaved && styles.savedText]}>{row.label}</Text>
-                        {row.hasDetails ? <Pressable accessibilityRole="button" accessibilityLabel={`Chi tiết ${row.label}`} hitSlop={8} onPress={() => setDetails(row.details)} style={styles.infoBadge}><Text style={styles.infoText}>i</Text></Pressable> : null}
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                </View>
-              ))}
-            </ScrollView>
+            <View style={styles.list} onLayout={({ nativeEvent }) => setColumnsHeight(nativeEvent.layout.height)}>
+              <ScrollView horizontal style={styles.list} contentContainerStyle={[styles.columns, columnsHeight > 0 && { height: columnsHeight }]}>
+                {list.length === 0 ? <Text style={styles.empty}>Chưa có dữ liệu turn hôm nay.</Text> : null}
+                {list.map((column) => (
+                  <View key={String(column.employeeId)} style={styles.column}>
+                    <Text style={[styles.empName, column.hasSaved && styles.savedText]}>{column.name}</Text>
+                    <Text style={styles.amount}>{formatMoney(column.totalAmount)}</Text>
+                    <ScrollView nestedScrollEnabled style={styles.ticketList}>
+                      {column.rows.map((row) => (
+                        <Pressable
+                          key={row.key}
+                          style={[styles.row, row.isSaved && styles.savedRow]}
+                          accessibilityRole={row.hasDetails ? "button" : undefined}
+                          onPress={row.hasDetails ? () => setDetails(row.details) : undefined}
+                        >
+                          <Text style={[styles.rowLabel, row.isSaved && styles.savedText]}>{row.label}</Text>
+                          {row.hasDetails ? <Pressable accessibilityRole="button" accessibilityLabel={`Chi tiết ${row.label}`} hitSlop={8} onPress={() => setDetails(row.details)} style={styles.infoBadge}><Text style={styles.infoText}>i</Text></Pressable> : null}
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
           )}
 
           <View style={styles.total}>

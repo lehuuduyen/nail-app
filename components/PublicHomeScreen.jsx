@@ -96,10 +96,10 @@ export default function PublicHomeScreen() {
 
     try {
       const [emps, txRes, turnRes] = await Promise.all([
-        fetchCatalogEmployees(),
+        fetchCatalogEmployees().catch(() => []),
         api.get('/api/transactions', {
           params: { limit: 200, date: salonYmd },
-        }),
+        }).catch(() => ({ data: [] })),
         fetchTurnsForDate(salonYmd).catch(() => null),
         fetchCheckTurnColumns(salonYmd).catch(() => null).then((result) => {
           // A receipts/catalog failure must not discard a successful Check Turn refresh.
