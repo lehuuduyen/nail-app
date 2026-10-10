@@ -715,6 +715,7 @@ export default function NewTicketScreen() {
           employeeId: Number(eid),
           serviceId: Number(svcId),
           amount,
+          serviceAmount: Math.round(Number(line.price) * (line.qty || 1) * 100) / 100,
           tips: Math.round(tips * 100) / 100,
           paymentMethod: method === 'card' ? 'card' : 'cash',
           date,
@@ -733,6 +734,7 @@ export default function NewTicketScreen() {
         }
         return {
           line,
+          localTicketId: usePosStore.getState().localTicketId,
           employeeId: eid,
           serviceId: svcId,
           body,
@@ -745,6 +747,17 @@ export default function NewTicketScreen() {
   );
 
   const persistPayloadsToApi = useCallback(async (payloads, helcimOnFirstRow) => {
+    // Keep the saved-ticket identity on payloads: Stripe can clear the draft before persistence.
+    const removeCompletedSave = async () => {
+      const id = payloads[0]?.localTicketId;
+      if (!id) return;
+      try {
+        await useLocalTicketStore.getState().remove(id);
+      } catch {
+        // Payment is already recorded; a storage failure must not request payment again.
+        Alert.alert('Đã thanh toán', 'Chưa xoá được vé Save trên thiết bị. Không thanh toán lại; liên hệ quản lý để kiểm tra.');
+      }
+    };
     const allApi = payloads.length > 0 && payloads.every((p) => p.canApi);
     if (!allApi) {
       Alert.alert(
@@ -763,6 +776,7 @@ export default function NewTicketScreen() {
         }
         await api.post('/api/transactions', body);
       }
+      await removeCompletedSave();
       usePosStore.getState().bumpHomeRefresh();
       return true;
     } catch {

@@ -4,7 +4,7 @@ import { Alert, AppState, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import api from '../api/client';
 import { fetchCatalogEmployees, fetchSalonDisplayName } from '../api/catalog';
-import { fetchTurnsForDate } from '../api/turns';
+import { fetchCheckTurnColumns, fetchTurnsForDate } from '../api/turns';
 import CheckTurnModal from './CheckTurnModal';
 import CustomerReceipts from './CustomerReceipts';
 import LeftSidebar from './LeftSidebar';
@@ -28,6 +28,8 @@ import { transactionsToReceiptRows } from '../utils/receiptsFromTransactions';
 
 import { useLocalTicketStore } from '../store/localTicketStore';
 import { phoenixDay, nextPhoenixMidnight, ticketStaffNames } from '../utils/localTickets';
+
+import { buildCheckTurnColumns } from '../utils/checkTurnColumns';
 
 const PAGE_BG = '#f0f0f0';
 const RIGHT_COL_W = 280;
@@ -68,6 +70,8 @@ export default function PublicHomeScreen() {
     date: '',
     rotationTotal: 0,
   });
+  const [checkTurnSnapshot, setCheckTurnSnapshot] = useState(null);
+  const [checkTurnUnavailable, setCheckTurnUnavailable] = useState(false);
   const [checkTurnOpen, setCheckTurnOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -92,11 +96,16 @@ export default function PublicHomeScreen() {
 
     try {
       const [emps, txRes, turnRes] = await Promise.all([
-        fetchCatalogEmployees(),
+        fetchCatalogEmployees().catch(() => []),
         api.get('/api/transactions', {
           params: { limit: 200, date: salonYmd },
-        }),
+        }).catch(() => ({ data: [] })),
         fetchTurnsForDate(salonYmd).catch(() => null),
+        fetchCheckTurnColumns(salonYmd).catch(() => null).then((result) => {
+          // A receipts/catalog failure must not discard a successful Check Turn refresh.
+          if (result) setCheckTurnSnapshot(result);
+          setCheckTurnUnavailable(!result);
+        }),
       ]);
       const list = emps;
       if (list.length) {
@@ -136,7 +145,13 @@ export default function PublicHomeScreen() {
   const refreshTurnsOnly = useCallback(async () => {
     const salonYmd = getSalonDateYmd();
     try {
-      const data = await fetchTurnsForDate(salonYmd);
+      const [data, checkTurnRes] = await Promise.all([
+        fetchTurnsForDate(salonYmd).catch(() => null),
+        fetchCheckTurnColumns(salonYmd).catch(() => null),
+      ]);
+      if (checkTurnRes) setCheckTurnSnapshot(checkTurnRes);
+      setCheckTurnUnavailable(!checkTurnRes);
+      if (!data) return;
       setTurnSnapshot({
         employees: data.employees || [],
         suggested: data.suggested ?? null,
@@ -198,6 +213,13 @@ export default function PublicHomeScreen() {
         (r.serviceBy || '').replace(/^Service By:\s*/, '').split('+').map((n) => n.trim()).filter(Boolean).join(' + ') };
     }),
   ], [localTickets, localDay, unpaidReceipts, transactions]);
+  const checkTurnColumns = useMemo(() => buildCheckTurnColumns({
+    apiColumns: checkTurnSnapshot?.date === salonYmd ? checkTurnSnapshot.columns : [],
+    savedTickets: localTickets,
+    employees: staff,
+    dayYmd: localDay,
+  }), [checkTurnSnapshot, localTickets, staff, salonYmd, localDay]);
+
   const openLocalReceipt = (receipt) => {
     useLocalTicketStore.getState().requestOpen(receipt.id);
     router.push('/(pos)/new-ticket');
@@ -295,16 +317,19 @@ export default function PublicHomeScreen() {
             usePosStore.getState().setStaff(null, null);
             router.push('/(pos)/new-ticket');
           }}
-          onCheckTurns={() => setCheckTurnOpen(true)}
+          onCheckTurns={() => {
+            refreshLocalTickets();
+            setCheckTurnOpen(true);
+            refreshTurnsOnly();
+          }}
         />
       </View>
 
       <CheckTurnModal
         visible={checkTurnOpen}
         onClose={() => setCheckTurnOpen(false)}
-        turnData={turnSnapshot.employees}
-        suggested={turnSnapshot.suggested}
-        dateLabel={receiptsDaySubtext}
+        columns={checkTurnColumns}
+        unavailable={checkTurnUnavailable}
       />
 
       <OwnerPinModal

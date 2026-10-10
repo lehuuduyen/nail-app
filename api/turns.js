@@ -10,3 +10,11 @@ export async function fetchTurnsForDate(dateYmd) {
   });
   return data;
 }
+
+/** GET /api/turns/check-turn returns { success, date, columns, total }. */
+export async function fetchCheckTurnColumns(dateYmd) {
+  const { data } = await api.get('/api/turns/check-turn', {
+    params: { date: dateYmd },
+  });
+  return data;
+}
